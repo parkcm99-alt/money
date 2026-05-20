@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   AreaChart,
@@ -10,7 +10,6 @@ import {
   Cell,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis
@@ -27,6 +26,7 @@ import {
   Pencil,
   Plug,
   Plus,
+  RotateCcw,
   Send,
   TrendingUp,
   Wallet
@@ -159,6 +159,12 @@ const tabItems = [
   { id: "integrations", label: "연동 준비" }
 ] as const;
 const SAMPLE_BASE_DATE = "2026-05-16";
+const STORAGE_KEYS = {
+  transactions: "couple-finance-dashboard.transactions.v1",
+  periodMemo: "couple-finance-dashboard.periodMemo.v1"
+} as const;
+const DEFAULT_PERIOD_MEMO =
+  "이번 기간은 주거비와 생활/마트 지출이 컸다. 다음 기간은 식비 예산을 먼저 확인하고 장보기 횟수를 줄여보기.";
 const periodOptions = [
   { type: "week", label: "주간" },
   { type: "month", label: "월간" },
@@ -185,6 +191,29 @@ type DraftTransaction = {
   amount: string;
   memo: string;
 };
+
+type ParsedNotificationSuccess = {
+  line: string;
+  status: "parsed";
+  date: string;
+  time: string;
+  owner: Owner;
+  type: "카드";
+  account: string;
+  merchant: string;
+  category: string;
+  amount: number;
+  memo: string;
+  duplicate: boolean;
+};
+
+type ParsedNotificationIssue = {
+  line: string;
+  reason: string;
+  status: "failed" | "cancelled" | "ignored";
+};
+
+type ParsedNotificationRow = ParsedNotificationSuccess | ParsedNotificationIssue;
 
 const emptyDraft: DraftTransaction = {
   date: SAMPLE_BASE_DATE,
@@ -288,6 +317,199 @@ const defaultPeriodFilter: PeriodFilter = {
   periodType: "week",
   ...getPresetDateRange("week")
 };
+
+function isTransaction(value: unknown): value is Transaction {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Transaction>;
+
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.date === "string" &&
+    ["남편", "아내", "공동"].includes(candidate.owner ?? "") &&
+    ["카드", "계좌", "현금"].includes(candidate.type ?? "") &&
+    typeof candidate.account === "string" &&
+    typeof candidate.merchant === "string" &&
+    typeof candidate.category === "string" &&
+    typeof candidate.amount === "number" &&
+    Number.isFinite(candidate.amount) &&
+    typeof candidate.memo === "string"
+  );
+}
+
+function parseStoredTransactions(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every(isTransaction) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredMemo(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getTransactionKey({
+  account,
+  amount,
+  date,
+  merchant
+}: Pick<Transaction, "account" | "amount" | "date" | "merchant">) {
+  return `${date}|${account.trim()}|${merchant.trim()}|${amount}`;
+}
+
+function inferNotificationOwner(account: string): Owner {
+  if (account.includes("국민카드")) {
+    return "남편";
+  }
+
+  if (account.includes("삼성카드") || account.includes("현대카드")) {
+    return "아내";
+  }
+
+  if (account.includes("생활비카드")) {
+    return "공동";
+  }
+
+  return "공동";
+}
+
+function inferNotificationCategory(merchant: string) {
+  const rules = [
+    { category: "생활/마트", keywords: ["이마트", "마트", "쿠팡", "다이소"] },
+    { category: "교통", keywords: ["주유", "주유소", "GS칼텍스", "SK에너지", "S-OIL"] },
+    { category: "카페/간식", keywords: ["카페", "스타벅스", "투썸", "메가커피", "컴포즈"] },
+    { category: "육아/의료", keywords: ["병원", "의원", "약국", "소아과"] },
+    { category: "식비", keywords: ["배민", "요기요", "식당", "음식점", "김밥", "치킨", "피자"] },
+    { category: "주거", keywords: ["관리비", "아파트", "전기", "가스", "수도"] }
+  ];
+
+  return (
+    rules.find((rule) => rule.keywords.some((keyword) => merchant.includes(keyword)))?.category ??
+    "기타"
+  );
+}
+
+function formatNotificationDate(month: number, day: number) {
+  return `${SAMPLE_BASE_DATE.slice(0, 4)}-${`${month}`.padStart(2, "0")}-${`${day}`.padStart(
+    2,
+    "0"
+  )}`;
+}
+
+function isValidNotificationDate(month: number, day: number) {
+  const year = Number(SAMPLE_BASE_DATE.slice(0, 4));
+  const parsed = new Date(year, month - 1, day);
+
+  return (
+    Number.isInteger(month) &&
+    Number.isInteger(day) &&
+    parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day
+  );
+}
+
+function parseNotificationText(text: string, transactions: Transaction[]): ParsedNotificationRow[] {
+  const existingKeys = new Set(transactions.map((transaction) => getTransactionKey(transaction)));
+  const batchKeys = new Set<string>();
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  return lines.map((line) => {
+    if (["승인취소", "취소", "환불"].some((keyword) => line.includes(keyword))) {
+      return {
+        line,
+        reason: "취소/환불 항목",
+        status: "cancelled"
+      };
+    }
+
+    if (!line.includes("승인")) {
+      return {
+        line,
+        reason: "승인 문구가 없어 제외",
+        status: "ignored"
+      };
+    }
+
+    const match = line.match(
+      /^\[([^\]]+)\]\s+(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})\s+(.+?)\s+([\d,]+)원\s*승인/
+    );
+
+    if (!match) {
+      return {
+        line,
+        reason: "알림 형식을 읽을 수 없음",
+        status: "failed"
+      };
+    }
+
+    const [, accountText, monthText, dayText, hourText, minuteText, merchantText, amountText] =
+      match;
+    const account = accountText.trim();
+    const month = Number(monthText);
+    const day = Number(dayText);
+    const hour = Number(hourText);
+    const minute = Number(minuteText);
+    const amount = Number(amountText.replaceAll(",", ""));
+    const merchant = merchantText.trim();
+
+    if (!isValidNotificationDate(month, day) || hour > 23 || minute > 59) {
+      return {
+        line,
+        reason: "날짜 또는 시간이 유효하지 않음",
+        status: "failed"
+      };
+    }
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return {
+        line,
+        reason: "금액을 읽을 수 없음",
+        status: "failed"
+      };
+    }
+
+    const date = formatNotificationDate(month, day);
+    const key = getTransactionKey({ account, amount, date, merchant });
+    const duplicate = existingKeys.has(key) || batchKeys.has(key);
+    batchKeys.add(key);
+
+    return {
+      account,
+      amount,
+      category: inferNotificationCategory(merchant),
+      date,
+      duplicate,
+      line,
+      memo: "아이폰 알림 붙여넣기",
+      merchant,
+      owner: inferNotificationOwner(account),
+      status: "parsed",
+      time: `${`${hour}`.padStart(2, "0")}:${`${minute}`.padStart(2, "0")}`,
+      type: "카드"
+    };
+  });
+}
 
 function Card({
   children,
@@ -481,6 +703,39 @@ function ChartFallback({ message = "차트 준비 중" }: { message?: string }) 
   );
 }
 
+function ChartBox({
+  children,
+  fallbackMessage,
+  ready
+}: {
+  children: (size: { height: number; width: number }) => React.ReactNode;
+  fallbackMessage: string;
+  ready: boolean;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [width, setWidth] = useState(0);
+  const height = 288;
+
+  useEffect(() => {
+    if (!containerRef.current || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(([entry]) => {
+      setWidth(Math.max(0, Math.floor(entry.contentRect.width)));
+    });
+
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={containerRef} className="h-72 min-w-0">
+      {ready && width > 0 ? children({ height, width }) : <ChartFallback message={fallbackMessage} />}
+    </div>
+  );
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [transactions, setTransactions] = useState<Transaction[]>(initialTransactions);
@@ -489,13 +744,17 @@ export default function Home() {
     startDate: defaultPeriodFilter.startDate,
     endDate: defaultPeriodFilter.endDate
   });
+  const [storageReady, setStorageReady] = useState(false);
   const [chartsReady, setChartsReady] = useState(false);
+  const [resetStorageToken, setResetStorageToken] = useState(0);
   const [draft, setDraft] = useState<DraftTransaction>(emptyDraft);
-  const [periodMemo, setPeriodMemo] = useState(
-    "이번 기간은 주거비와 생활/마트 지출이 컸다. 다음 기간은 식비 예산을 먼저 확인하고 장보기 횟수를 줄여보기."
-  );
+  const [periodMemo, setPeriodMemo] = useState(DEFAULT_PERIOD_MEMO);
+  const [notificationText, setNotificationText] = useState("");
+  const [parsedNotificationRows, setParsedNotificationRows] = useState<ParsedNotificationRow[]>([]);
+  const [importNotice, setImportNotice] = useState("붙여넣은 카드 승인 알림을 분석해주세요.");
   const [formNotice, setFormNotice] = useState("샘플 데이터로 시작했습니다.");
   const [connectorNotice, setConnectorNotice] = useState("아직 외부 API는 연결하지 않았습니다.");
+  const [storageNotice, setStorageNotice] = useState("브라우저 저장소와 동기화 준비 중입니다.");
 
   const totalBalance = useMemo(() => getTotalBalance(accounts), []);
   const filteredTransactions = useMemo(
@@ -547,6 +806,76 @@ export default function Home() {
     `카드 결제예정액은 ${formatKRW(scheduledCardPayment)}입니다.`,
     "외부 API, 구글시트, 텔레그램 발송은 다음 단계에서 연결합니다."
   ];
+  const parsedSuccessRows = parsedNotificationRows.filter(
+    (row): row is ParsedNotificationSuccess => row.status === "parsed"
+  );
+  const addableNotificationRows = parsedSuccessRows.filter((row) => !row.duplicate);
+  const issueNotificationRows = parsedNotificationRows.filter(
+    (row): row is ParsedNotificationIssue => row.status !== "parsed"
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const storedTransactions = parseStoredTransactions(
+      window.localStorage.getItem(STORAGE_KEYS.transactions)
+    );
+    const storedMemo = parseStoredMemo(window.localStorage.getItem(STORAGE_KEYS.periodMemo));
+
+    if (storedTransactions) {
+      setTransactions(storedTransactions);
+    }
+
+    if (storedMemo !== null) {
+      setPeriodMemo(storedMemo);
+    }
+
+    setStorageNotice(
+      storedTransactions || storedMemo !== null
+        ? "저장된 데이터를 불러왔습니다."
+        : "샘플 데이터로 시작했습니다. 변경사항은 이 브라우저에 저장됩니다."
+    );
+    setStorageReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!storageReady || typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
+    } catch {
+      setStorageNotice("거래내역을 브라우저 저장소에 저장하지 못했습니다.");
+    }
+  }, [storageReady, transactions]);
+
+  useEffect(() => {
+    if (!storageReady || typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.periodMemo, JSON.stringify(periodMemo));
+    } catch {
+      setStorageNotice("기간 메모를 브라우저 저장소에 저장하지 못했습니다.");
+    }
+  }, [periodMemo, storageReady]);
+
+  useEffect(() => {
+    if (!resetStorageToken || typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.removeItem(STORAGE_KEYS.transactions);
+      window.localStorage.removeItem(STORAGE_KEYS.periodMemo);
+    } catch {
+      setStorageNotice("브라우저 저장소 초기화 중 오류가 있었지만 화면 데이터는 복구했습니다.");
+    }
+  }, [resetStorageToken]);
 
   useEffect(() => {
     setChartsReady(true);
@@ -617,6 +946,68 @@ export default function Home() {
     );
   }
 
+  function analyzeNotificationText() {
+    const rows = parseNotificationText(notificationText, transactions);
+    const parsedCount = rows.filter((row) => row.status === "parsed").length;
+    const addableCount = rows.filter((row) => row.status === "parsed" && !row.duplicate).length;
+    const duplicateCount = rows.filter((row) => row.status === "parsed" && row.duplicate).length;
+    const issueCount = rows.filter((row) => row.status !== "parsed").length;
+
+    setParsedNotificationRows(rows);
+
+    if (rows.length === 0) {
+      setImportNotice("분석할 알림 줄이 없습니다.");
+      return;
+    }
+
+    setImportNotice(
+      `분석 완료: 승인 ${parsedCount}건, 추가 가능 ${addableCount}건, 중복 ${duplicateCount}건, 제외/실패 ${issueCount}건`
+    );
+  }
+
+  function addParsedNotificationsToTransactions() {
+    const timestamp = Date.now();
+    const nextTransactions = addableNotificationRows.map<Transaction>((row, index) => ({
+      account: row.account,
+      amount: row.amount,
+      category: row.category,
+      date: row.date,
+      id: `tx-import-${timestamp}-${index}`,
+      memo: row.memo,
+      merchant: row.merchant,
+      owner: row.owner,
+      type: row.type
+    }));
+
+    if (nextTransactions.length === 0) {
+      setImportNotice("추가할 새 거래가 없습니다. 중복 또는 제외 항목만 있습니다.");
+      return;
+    }
+
+    setTransactions((current) => [...nextTransactions, ...current]);
+    setParsedNotificationRows((current) =>
+      current.map((row) => (row.status === "parsed" ? { ...row, duplicate: true } : row))
+    );
+    setImportNotice(`${nextTransactions.length}건을 거래내역에 추가했습니다.`);
+  }
+
+  function resetStoredData() {
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.removeItem(STORAGE_KEYS.transactions);
+        window.localStorage.removeItem(STORAGE_KEYS.periodMemo);
+      } catch {
+        setStorageNotice("브라우저 저장소 초기화 중 오류가 있었지만 화면 데이터는 복구했습니다.");
+      }
+    }
+
+    setTransactions(initialTransactions);
+    setPeriodMemo(DEFAULT_PERIOD_MEMO);
+    setFormNotice("샘플 데이터로 초기화했습니다.");
+    setStorageNotice("데이터를 초기화하고 샘플 데이터로 복구했습니다.");
+    setResetStorageToken((current) => current + 1);
+  }
+
   function prepareConnector(label: string) {
     setConnectorNotice(`${label}은 다음 버전에서 연결 예정입니다. 현재는 mock 구조만 준비했습니다.`);
   }
@@ -649,9 +1040,16 @@ export default function Home() {
               <p className="text-sm text-slate-500">
                 {periodRangeText} · 선택 기간 거래 {filteredTransactions.length}건
               </p>
+              <p className="text-xs font-semibold text-slate-400">{storageNotice}</p>
             </div>
           </div>
-          <Badge tone="blue">{periodLabel}</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone="blue">{periodLabel}</Badge>
+            <Button variant="secondary" onClick={resetStoredData}>
+              <RotateCcw className="h-4 w-4" />
+              데이터 초기화
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -751,36 +1149,38 @@ export default function Home() {
                 </div>
                 <Badge tone="blue">{periodLabel}</Badge>
               </div>
-              <div className="h-72">
-                {chartsReady && weeklyFlowData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={weeklyFlowData} margin={{ left: 4, right: 12 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="date" tick={{ fontSize: 12 }} stroke="#64748b" />
-                      <YAxis
-                        tick={{ fontSize: 12 }}
-                        stroke="#64748b"
-                        tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`}
-                      />
-                      <Tooltip
-                        formatter={(value) => formatKRW(Number(value))}
-                        labelFormatter={(label) => `${label}`}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="amount"
-                        stroke="#2563eb"
-                        fill="#bfdbfe"
-                        strokeWidth={3}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <ChartFallback
-                    message={chartsReady ? "선택 기간 거래가 없습니다." : "차트 준비 중"}
-                  />
+              <ChartBox
+                fallbackMessage={chartsReady ? "선택 기간 거래가 없습니다." : "차트 준비 중"}
+                ready={chartsReady && weeklyFlowData.length > 0}
+              >
+                {({ height, width }) => (
+                  <AreaChart
+                    data={weeklyFlowData}
+                    height={height}
+                    margin={{ left: 4, right: 12 }}
+                    width={width}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="date" tick={{ fontSize: 12 }} stroke="#64748b" />
+                    <YAxis
+                      tick={{ fontSize: 12 }}
+                      stroke="#64748b"
+                      tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`}
+                    />
+                    <Tooltip
+                      formatter={(value) => formatKRW(Number(value))}
+                      labelFormatter={(label) => `${label}`}
+                    />
+                    <Area
+                      type="monotone"
+                      dataKey="amount"
+                      stroke="#2563eb"
+                      fill="#bfdbfe"
+                      strokeWidth={3}
+                    />
+                  </AreaChart>
                 )}
-              </div>
+              </ChartBox>
             </Card>
 
             <Card>
@@ -791,34 +1191,30 @@ export default function Home() {
                 </div>
                 <Badge tone="green">{categoryData.length}개</Badge>
               </div>
-              <div className="h-72">
-                {chartsReady && categoryData.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={categoryData}
-                        dataKey="amount"
-                        nameKey="name"
-                        innerRadius={52}
-                        outerRadius={92}
-                        paddingAngle={3}
-                      >
-                        {categoryData.map((entry, index) => (
-                          <Cell
-                            key={entry.name}
-                            fill={chartColors[index % chartColors.length]}
-                          />
-                        ))}
-                      </Pie>
-                      <Tooltip formatter={(value) => formatKRW(Number(value))} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <ChartFallback
-                    message={chartsReady ? "선택 기간 소비 데이터가 없습니다." : "차트 준비 중"}
-                  />
+              <ChartBox
+                fallbackMessage={
+                  chartsReady ? "선택 기간 소비 데이터가 없습니다." : "차트 준비 중"
+                }
+                ready={chartsReady && categoryData.length > 0}
+              >
+                {({ height, width }) => (
+                  <PieChart height={height} width={width}>
+                    <Pie
+                      data={categoryData}
+                      dataKey="amount"
+                      nameKey="name"
+                      innerRadius={52}
+                      outerRadius={92}
+                      paddingAngle={3}
+                    >
+                      {categoryData.map((entry, index) => (
+                        <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value) => formatKRW(Number(value))} />
+                  </PieChart>
                 )}
-              </div>
+              </ChartBox>
               <div className="grid gap-2">
                 {categoryData.length === 0 && (
                   <p className="text-sm text-slate-500">선택 기간 카테고리 데이터가 없습니다.</p>
@@ -853,34 +1249,33 @@ export default function Home() {
                 </div>
                 <Badge tone="orange">비교</Badge>
               </div>
-              <div className="h-72">
-                {chartsReady && filteredTransactions.length > 0 ? (
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={ownerData} margin={{ left: 4, right: 12 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="#64748b" />
-                      <YAxis
-                        tick={{ fontSize: 12 }}
-                        stroke="#64748b"
-                        tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`}
-                      />
-                      <Tooltip formatter={(value) => formatKRW(Number(value))} />
-                      <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
-                        {ownerData.map((entry, index) => (
-                          <Cell
-                            key={entry.name}
-                            fill={chartColors[index % chartColors.length]}
-                          />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                ) : (
-                  <ChartFallback
-                    message={chartsReady ? "선택 기간 거래가 없습니다." : "차트 준비 중"}
-                  />
+              <ChartBox
+                fallbackMessage={chartsReady ? "선택 기간 거래가 없습니다." : "차트 준비 중"}
+                ready={chartsReady && filteredTransactions.length > 0}
+              >
+                {({ height, width }) => (
+                  <BarChart
+                    data={ownerData}
+                    height={height}
+                    margin={{ left: 4, right: 12 }}
+                    width={width}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="#64748b" />
+                    <YAxis
+                      tick={{ fontSize: 12 }}
+                      stroke="#64748b"
+                      tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`}
+                    />
+                    <Tooltip formatter={(value) => formatKRW(Number(value))} />
+                    <Bar dataKey="amount" radius={[6, 6, 0, 0]}>
+                      {ownerData.map((entry, index) => (
+                        <Cell key={entry.name} fill={chartColors[index % chartColors.length]} />
+                      ))}
+                    </Bar>
+                  </BarChart>
                 )}
-              </div>
+              </ChartBox>
             </Card>
 
             <Card>
@@ -988,85 +1383,190 @@ export default function Home() {
 
       {activeTab === "transactions" && (
         <div className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-          <Card>
-            <div className="mb-5 flex items-center gap-3">
-              <Plus className="h-5 w-5 text-blue-600" />
-              <div>
-                <h2 className="text-lg font-bold text-slate-950">빠른 거래 추가</h2>
-                <p className="text-sm text-slate-500">오늘은 로컬 상태에만 저장됩니다.</p>
+          <div className="grid gap-6">
+            <Card>
+              <div className="mb-5 flex items-center gap-3">
+                <Plus className="h-5 w-5 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">빠른 거래 추가</h2>
+                  <p className="text-sm text-slate-500">오늘은 로컬 상태에만 저장됩니다.</p>
+                </div>
               </div>
-            </div>
-            <form className="grid gap-4" onSubmit={addTransaction}>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="날짜">
-                  <Input
-                    type="date"
-                    value={draft.date}
-                    onChange={(event) => updateDraft("date", event.target.value)}
+              <form className="grid gap-4" onSubmit={addTransaction}>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="날짜">
+                    <Input
+                      type="date"
+                      value={draft.date}
+                      onChange={(event) => updateDraft("date", event.target.value)}
+                    />
+                  </Field>
+                  <Field label="소유">
+                    <SelectField
+                      value={draft.owner}
+                      onChange={(value) => updateDraft("owner", value)}
+                      options={ownerOptions}
+                    />
+                  </Field>
+                  <Field label="유형">
+                    <SelectField
+                      value={draft.type}
+                      onChange={(value) => updateDraft("type", value)}
+                      options={typeOptions}
+                    />
+                  </Field>
+                  <Field label="계좌/카드">
+                    <Input
+                      value={draft.account}
+                      onChange={(event) => updateDraft("account", event.target.value)}
+                      placeholder="생활비카드"
+                    />
+                  </Field>
+                  <Field label="거래처">
+                    <Input
+                      value={draft.merchant}
+                      onChange={(event) => updateDraft("merchant", event.target.value)}
+                      placeholder="예: 편의점"
+                    />
+                  </Field>
+                  <Field label="카테고리">
+                    <Input
+                      value={draft.category}
+                      onChange={(event) => updateDraft("category", event.target.value)}
+                      placeholder="예: 식비"
+                    />
+                  </Field>
+                  <Field label="금액">
+                    <Input
+                      type="number"
+                      min="0"
+                      inputMode="numeric"
+                      value={draft.amount}
+                      onChange={(event) => updateDraft("amount", event.target.value)}
+                      placeholder="0"
+                    />
+                  </Field>
+                </div>
+                <Field label="메모">
+                  <Textarea
+                    value={draft.memo}
+                    onChange={(event) => updateDraft("memo", event.target.value)}
+                    placeholder="거래 메모를 남겨주세요."
                   />
                 </Field>
-                <Field label="소유">
-                  <SelectField
-                    value={draft.owner}
-                    onChange={(value) => updateDraft("owner", value)}
-                    options={ownerOptions}
-                  />
-                </Field>
-                <Field label="유형">
-                  <SelectField
-                    value={draft.type}
-                    onChange={(value) => updateDraft("type", value)}
-                    options={typeOptions}
-                  />
-                </Field>
-                <Field label="계좌/카드">
-                  <Input
-                    value={draft.account}
-                    onChange={(event) => updateDraft("account", event.target.value)}
-                    placeholder="생활비카드"
-                  />
-                </Field>
-                <Field label="거래처">
-                  <Input
-                    value={draft.merchant}
-                    onChange={(event) => updateDraft("merchant", event.target.value)}
-                    placeholder="예: 편의점"
-                  />
-                </Field>
-                <Field label="카테고리">
-                  <Input
-                    value={draft.category}
-                    onChange={(event) => updateDraft("category", event.target.value)}
-                    placeholder="예: 식비"
-                  />
-                </Field>
-                <Field label="금액">
-                  <Input
-                    type="number"
-                    min="0"
-                    inputMode="numeric"
-                    value={draft.amount}
-                    onChange={(event) => updateDraft("amount", event.target.value)}
-                    placeholder="0"
-                  />
-                </Field>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-500">{formNotice}</p>
+                  <Button type="submit">
+                    <Plus className="h-4 w-4" />
+                    거래 추가
+                  </Button>
+                </div>
+              </form>
+            </Card>
+
+            <Card>
+              <div className="mb-5 flex items-center gap-3">
+                <CreditCard className="h-5 w-5 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">카드 알림 가져오기</h2>
+                  <p className="text-sm text-slate-500">아이폰 카드 승인 알림을 붙여넣어 거래로 변환합니다.</p>
+                </div>
               </div>
-              <Field label="메모">
+              <div className="grid gap-4">
                 <Textarea
-                  value={draft.memo}
-                  onChange={(event) => updateDraft("memo", event.target.value)}
-                  placeholder="거래 메모를 남겨주세요."
+                  className="min-h-40"
+                  value={notificationText}
+                  onChange={(event) => setNotificationText(event.target.value)}
+                  placeholder={`[국민카드] 05/16 14:22 이마트 52,000원 승인
+[삼성카드] 05/15 10:12 소아과 18,700원 승인
+[현대카드] 05/14 20:31 쿠팡 34,200원 승인`}
                 />
-              </Field>
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-slate-500">{formNotice}</p>
-                <Button type="submit">
-                  <Plus className="h-4 w-4" />
-                  거래 추가
-                </Button>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-500">{importNotice}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={analyzeNotificationText}>
+                      알림 내용 분석하기
+                    </Button>
+                    <Button
+                      disabled={addableNotificationRows.length === 0}
+                      onClick={addParsedNotificationsToTransactions}
+                    >
+                      거래내역에 추가
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto rounded-md border border-slate-200">
+                  <table className="w-full min-w-[820px] border-separate border-spacing-0 text-left text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500">
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">상태</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">날짜</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">시간</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">카드</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">사용처</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">분류</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">소유</th>
+                        <th className="border-b border-slate-200 px-3 py-3 text-right font-semibold">금액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parsedSuccessRows.length === 0 && (
+                        <tr>
+                          <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                            분석 결과가 없습니다.
+                          </td>
+                        </tr>
+                      )}
+                      {parsedSuccessRows.map((row, index) => (
+                        <tr
+                          key={`${row.line}-${row.date}-${row.amount}-${index}`}
+                          className="text-slate-700"
+                        >
+                          <td className="border-b border-slate-100 px-3 py-3">
+                            <Badge tone={row.duplicate ? "orange" : "green"}>
+                              {row.duplicate ? "중복" : "추가 가능"}
+                            </Badge>
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">{row.date}</td>
+                          <td className="border-b border-slate-100 px-3 py-3">{row.time}</td>
+                          <td className="border-b border-slate-100 px-3 py-3">{row.account}</td>
+                          <td className="border-b border-slate-100 px-3 py-3 font-semibold text-slate-900">
+                            {row.merchant}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">{row.category}</td>
+                          <td className="border-b border-slate-100 px-3 py-3">{row.owner}</td>
+                          <td className="border-b border-slate-100 px-3 py-3 text-right font-bold text-slate-950">
+                            {formatKRW(row.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {issueNotificationRows.length > 0 && (
+                  <div className="grid gap-2 rounded-md bg-slate-50 p-4">
+                    <p className="text-sm font-bold text-slate-700">파싱 실패/제외된 줄</p>
+                    {issueNotificationRows.map((row, index) => (
+                      <div
+                        key={`${row.status}-${row.line}-${index}`}
+                        className="grid gap-1 rounded-md border border-slate-200 bg-white p-3 text-sm"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone={row.status === "cancelled" ? "orange" : "slate"}>
+                            {row.reason}
+                          </Badge>
+                          <span className="text-slate-500">{row.status}</span>
+                        </div>
+                        <p className="break-words text-slate-700">{row.line}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </form>
-          </Card>
+            </Card>
+          </div>
 
           <div className="grid gap-6">
             <Card>
