@@ -183,6 +183,11 @@ type PeriodFilter = {
   endDate: string;
 };
 
+type TelegramSendResponse = {
+  ok: boolean;
+  message: string;
+};
+
 type DraftTransaction = {
   date: string;
   owner: Owner;
@@ -366,6 +371,10 @@ function getPeriodSpendingLabel(periodType: PeriodType) {
 
 function getPeriodLabel(periodType: PeriodType) {
   return periodOptions.find((option) => option.type === periodType)?.label ?? "직접설정";
+}
+
+function getReportPeriodLabel(periodType: PeriodType) {
+  return periodType === "custom" ? "선택 기간" : getPeriodLabel(periodType);
 }
 
 const defaultPeriodFilter: PeriodFilter = {
@@ -1227,6 +1236,10 @@ export default function Home() {
   const [backupCsvNotice, setBackupCsvNotice] = useState(
     "CSV를 구글시트에 업로드해 백업하거나 수기 수정 후 다시 가져올 수 있습니다."
   );
+  const [telegramNotice, setTelegramNotice] = useState(
+    "텔레그램 발송은 환경변수 설정 후 사용할 수 있습니다."
+  );
+  const [telegramSending, setTelegramSending] = useState(false);
   const [formNotice, setFormNotice] = useState("샘플 데이터로 시작했습니다.");
   const [connectorNotice, setConnectorNotice] = useState("아직 외부 API는 연결하지 않았습니다.");
   const [storageNotice, setStorageNotice] = useState("브라우저 저장소와 동기화 준비 중입니다.");
@@ -1267,11 +1280,37 @@ export default function Home() {
     [filteredTransactions]
   );
   const periodLabel = getPeriodLabel(periodFilter.periodType);
+  const reportPeriodLabel = getReportPeriodLabel(periodFilter.periodType);
   const periodSpendingLabel = getPeriodSpendingLabel(periodFilter.periodType);
   const periodRangeText = `${formatPeriodDate(periodFilter.startDate)} ~ ${formatPeriodDate(
     periodFilter.endDate
   )}`;
   const topCategory = categoryData[0];
+  const husbandSpending = ownerData.find((owner) => owner.name === "남편")?.amount ?? 0;
+  const wifeSpending = ownerData.find((owner) => owner.name === "아내")?.amount ?? 0;
+  const sharedSpending = ownerData.find((owner) => owner.name === "공동")?.amount ?? 0;
+  const telegramReportMessage = [
+    "[우리집 금융 리포트]",
+    "",
+    `기간: ${periodRangeText}`,
+    `조회 유형: ${reportPeriodLabel}`,
+    "",
+    `총 지출: ${formatKRW(totalSpending)}`,
+    `카드 결제예정액: ${formatKRW(scheduledCardPayment)}`,
+    "",
+    `남편 지출: ${formatKRW(husbandSpending)}`,
+    `아내 지출: ${formatKRW(wifeSpending)}`,
+    `공동 지출: ${formatKRW(sharedSpending)}`,
+    "",
+    "가장 큰 카테고리:",
+    topCategory ? `${topCategory.name} ${formatKRW(topCategory.amount)}` : "데이터 없음 0원",
+    "",
+    "메모:",
+    periodMemo.trim() || "작성된 기간 메모가 없습니다.",
+    "",
+    "안내:",
+    "이 리포트는 부부 금융 대시보드에서 발송되었습니다."
+  ].join("\n");
   const reportLines = [
     `리포트 기간: ${periodRangeText}`,
     `${periodSpendingLabel}은 ${formatKRW(totalSpending)}입니다.`,
@@ -1279,7 +1318,7 @@ export default function Home() {
       ? `가장 큰 카테고리는 ${topCategory.name}이며 ${formatKRW(topCategory.amount)}를 사용했습니다.`
       : "아직 카테고리 데이터가 없습니다.",
     `카드 결제예정액은 ${formatKRW(scheduledCardPayment)}입니다.`,
-    "외부 API, 구글시트, 텔레그램 발송은 다음 단계에서 연결합니다."
+    "금융 API와 구글시트 직접 연동은 다음 단계에서 연결합니다."
   ];
   const parsedSuccessRows = parsedNotificationRows.filter(
     (row): row is ParsedNotificationSuccess => row.status === "parsed"
@@ -1619,6 +1658,28 @@ export default function Home() {
     setBackupCsvNotice(`백업 CSV 거래 ${nextTransactions.length}건을 거래내역에 추가했습니다.`);
   }
 
+  async function sendTelegramReport() {
+    setTelegramSending(true);
+    setTelegramNotice("텔레그램으로 리포트를 발송하는 중입니다.");
+
+    try {
+      const response = await fetch("/api/telegram", {
+        body: JSON.stringify({ message: telegramReportMessage }),
+        headers: {
+          "Content-Type": "application/json"
+        },
+        method: "POST"
+      });
+      const result = (await response.json()) as TelegramSendResponse;
+
+      setTelegramNotice(result.message || "텔레그램 발송 결과를 확인하지 못했습니다.");
+    } catch {
+      setTelegramNotice("텔레그램 발송 요청 중 오류가 발생했습니다.");
+    } finally {
+      setTelegramSending(false);
+    }
+  }
+
   function resetStoredData() {
     if (typeof window !== "undefined") {
       try {
@@ -1761,7 +1822,7 @@ export default function Home() {
               icon={<CheckCircle2 className="h-5 w-5" />}
               label="기간 리포트 상태"
               value="초안 준비"
-              detail="텔레그램 발송 예정"
+              detail="텔레그램 발송 가능"
               tone="slate"
             />
           </section>
@@ -1991,12 +2052,18 @@ export default function Home() {
             </Card>
 
             <Card>
-              <div className="mb-4 flex items-center gap-3">
-                <Send className="h-5 w-5 text-blue-600" />
-                <div>
-                  <h2 className="text-lg font-bold text-slate-950">기간 리포트 미리보기</h2>
-                  <p className="text-sm text-slate-500">텔레그램 발송 전 초안</p>
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-center gap-3">
+                  <Send className="h-5 w-5 text-blue-600" />
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-950">기간 리포트 미리보기</h2>
+                    <p className="text-sm text-slate-500">텔레그램 발송 전 초안</p>
+                  </div>
                 </div>
+                <Button disabled={telegramSending} onClick={sendTelegramReport}>
+                  <Send className="h-4 w-4" />
+                  {telegramSending ? "발송 중" : "텔레그램 발송"}
+                </Button>
               </div>
               <div className="grid gap-3 rounded-md bg-slate-50 p-4 text-sm leading-6 text-slate-700">
                 {reportLines.map((line) => (
@@ -2004,6 +2071,7 @@ export default function Home() {
                 ))}
                 <p className="border-t border-slate-200 pt-3">{periodMemo}</p>
               </div>
+              <p className="mt-3 text-sm font-semibold text-slate-500">{telegramNotice}</p>
             </Card>
           </section>
         </div>
@@ -2424,11 +2492,20 @@ export default function Home() {
                 <div className="flex flex-col gap-3 rounded-md border border-slate-200 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="font-bold text-slate-950">Telegram 리포트 발송</p>
-                    <p className="text-sm text-slate-500">lib/connectors/telegram.ts</p>
+                    <p className="text-sm text-slate-500">
+                      app/api/telegram/route.ts · 환경변수 필요
+                    </p>
                   </div>
-                  <Button variant="secondary" onClick={() => prepareConnector("Telegram")}>
+                  <Button
+                    variant="secondary"
+                    onClick={() =>
+                      setConnectorNotice(
+                        "Telegram Bot API route가 준비되었습니다. TELEGRAM_BOT_TOKEN과 TELEGRAM_CHAT_ID를 설정하면 리포트에서 발송할 수 있습니다."
+                      )
+                    }
+                  >
                     <Send className="h-4 w-4" />
-                    연결 예정
+                    환경변수 필요
                   </Button>
                 </div>
               </div>
