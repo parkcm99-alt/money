@@ -29,9 +29,12 @@ import {
   Plug,
   Plus,
   RotateCcw,
+  Save,
   Send,
+  Trash2,
   TrendingUp,
-  Wallet
+  Wallet,
+  X
 } from "lucide-react";
 import type {
   Account,
@@ -1223,6 +1226,9 @@ export default function Home() {
   const [chartsReady, setChartsReady] = useState(false);
   const [resetStorageToken, setResetStorageToken] = useState(0);
   const [draft, setDraft] = useState<DraftTransaction>(emptyDraft);
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<DraftTransaction>(emptyDraft);
+  const [editNotice, setEditNotice] = useState("수정할 거래를 선택해주세요.");
   const [periodMemo, setPeriodMemo] = useState(DEFAULT_PERIOD_MEMO);
   const [notificationText, setNotificationText] = useState("");
   const [parsedNotificationRows, setParsedNotificationRows] = useState<ParsedNotificationRow[]>([]);
@@ -1275,9 +1281,13 @@ export default function Home() {
       .sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
       .map(([date, amount]) => ({ date: shortDate(date), amount }));
   }, [filteredTransactions]);
-  const recentTransactions = useMemo(
-    () => [...filteredTransactions].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8),
+  const sortedFilteredTransactions = useMemo(
+    () => [...filteredTransactions].sort((a, b) => b.date.localeCompare(a.date)),
     [filteredTransactions]
+  );
+  const recentTransactions = useMemo(
+    () => sortedFilteredTransactions.slice(0, 8),
+    [sortedFilteredTransactions]
   );
   const periodLabel = getPeriodLabel(periodFilter.periodType);
   const reportPeriodLabel = getReportPeriodLabel(periodFilter.periodType);
@@ -1438,6 +1448,13 @@ export default function Home() {
     setDraft((current) => ({ ...current, [key]: value }));
   }
 
+  function updateEditDraft<K extends keyof DraftTransaction>(
+    key: K,
+    value: DraftTransaction[K]
+  ) {
+    setEditDraft((current) => ({ ...current, [key]: value }));
+  }
+
   function addTransaction(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const amount = Number(draft.amount);
@@ -1470,6 +1487,91 @@ export default function Home() {
         transaction.id === id ? { ...transaction, memo } : transaction
       )
     );
+  }
+
+  function startEditTransaction(transaction: Transaction) {
+    setEditingTransactionId(transaction.id);
+    setEditDraft({
+      account: transaction.account,
+      amount: String(transaction.amount),
+      category: transaction.category,
+      date: transaction.date,
+      memo: transaction.memo,
+      merchant: transaction.merchant,
+      owner: transaction.owner,
+      type: transaction.type
+    });
+    setEditNotice(`${transaction.merchant} 거래를 수정 중입니다.`);
+    setActiveTab("transactions");
+  }
+
+  function cancelEditTransaction() {
+    setEditingTransactionId(null);
+    setEditDraft(emptyDraft);
+    setEditNotice("수정을 취소했습니다.");
+  }
+
+  function saveEditedTransaction(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!editingTransactionId) {
+      setEditNotice("수정할 거래를 먼저 선택해주세요.");
+      return;
+    }
+
+    const amount = Number(editDraft.amount);
+
+    if (
+      !editDraft.date ||
+      !editDraft.account.trim() ||
+      !editDraft.merchant.trim() ||
+      !editDraft.category.trim() ||
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      setEditNotice("날짜, 계좌, 사용처, 카테고리, 금액을 확인해주세요.");
+      return;
+    }
+
+    const nextTransaction: Transaction = {
+      account: editDraft.account.trim(),
+      amount,
+      category: editDraft.category.trim(),
+      date: editDraft.date,
+      id: editingTransactionId,
+      memo: editDraft.memo.trim(),
+      merchant: editDraft.merchant.trim(),
+      owner: editDraft.owner,
+      type: editDraft.type
+    };
+
+    setTransactions((current) =>
+      current.map((transaction) =>
+        transaction.id === editingTransactionId ? nextTransaction : transaction
+      )
+    );
+    setEditingTransactionId(null);
+    setEditDraft(emptyDraft);
+    setEditNotice(`${nextTransaction.merchant} 거래를 저장했습니다.`);
+  }
+
+  function deleteTransaction(transaction: Transaction) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`${transaction.merchant} ${formatKRW(transaction.amount)} 거래를 삭제할까요?`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    setTransactions((current) => current.filter((item) => item.id !== transaction.id));
+
+    if (editingTransactionId === transaction.id) {
+      setEditingTransactionId(null);
+      setEditDraft(emptyDraft);
+    }
+
+    setEditNotice(`${transaction.merchant} 거래를 삭제했습니다.`);
   }
 
   function analyzeNotificationText() {
@@ -1692,6 +1794,9 @@ export default function Home() {
 
     setTransactions(initialTransactions);
     setPeriodMemo(DEFAULT_PERIOD_MEMO);
+    setEditingTransactionId(null);
+    setEditDraft(emptyDraft);
+    setEditNotice("샘플 데이터로 초기화했습니다.");
     setFormNotice("샘플 데이터로 초기화했습니다.");
     setStorageNotice("데이터를 초기화하고 샘플 데이터로 복구했습니다.");
     setResetStorageToken((current) => current + 1);
@@ -1979,7 +2084,7 @@ export default function Home() {
                 </Button>
               </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[720px] border-separate border-spacing-0 text-left text-sm">
+                <table className="w-full min-w-[880px] border-separate border-spacing-0 text-left text-sm">
                   <thead>
                     <tr className="text-slate-500">
                       <th className="border-b border-slate-200 py-3 pr-4 font-semibold">날짜</th>
@@ -1988,13 +2093,14 @@ export default function Home() {
                       <th className="border-b border-slate-200 py-3 pr-4 font-semibold">거래처</th>
                       <th className="border-b border-slate-200 py-3 pr-4 font-semibold">카테고리</th>
                       <th className="border-b border-slate-200 py-3 text-right font-semibold">금액</th>
+                      <th className="border-b border-slate-200 py-3 pl-4 font-semibold">관리</th>
                     </tr>
                   </thead>
                   <tbody>
                     {recentTransactions.length === 0 && (
                       <tr>
                         <td
-                          colSpan={6}
+                          colSpan={7}
                           className="border-b border-slate-100 py-8 text-center text-slate-500"
                         >
                           선택 기간 거래가 없습니다.
@@ -2030,6 +2136,26 @@ export default function Home() {
                         </td>
                         <td className="border-b border-slate-100 py-3 text-right font-bold text-slate-950">
                           {formatKRW(transaction.amount)}
+                        </td>
+                        <td className="border-b border-slate-100 py-3 pl-4">
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              className="min-h-8 px-3 py-1 text-xs"
+                              variant="secondary"
+                              onClick={() => startEditTransaction(transaction)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              수정
+                            </Button>
+                            <Button
+                              className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                              variant="ghost"
+                              onClick={() => deleteTransaction(transaction)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              삭제
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -2370,6 +2496,102 @@ export default function Home() {
           <div className="grid gap-6">
             <Card>
               <div className="mb-5 flex items-center gap-3">
+                <Pencil className="h-5 w-5 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">거래 수정</h2>
+                  <p className="text-sm text-slate-500">선택한 거래의 날짜, 분류, 금액, 메모를 고칩니다.</p>
+                </div>
+              </div>
+
+              {!editingTransactionId && (
+                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  최근 거래내역 또는 아래 거래 카드에서 수정 버튼을 눌러주세요.
+                </div>
+              )}
+
+              {editingTransactionId && (
+                <form className="grid gap-4" onSubmit={saveEditedTransaction}>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="날짜">
+                      <Input
+                        type="date"
+                        value={editDraft.date}
+                        onChange={(event) => updateEditDraft("date", event.target.value)}
+                      />
+                    </Field>
+                    <Field label="사용자">
+                      <SelectField
+                        value={editDraft.owner}
+                        onChange={(value) => updateEditDraft("owner", value)}
+                        options={ownerOptions}
+                      />
+                    </Field>
+                    <Field label="유형">
+                      <SelectField
+                        value={editDraft.type}
+                        onChange={(value) => updateEditDraft("type", value)}
+                        options={typeOptions}
+                      />
+                    </Field>
+                    <Field label="계좌/카드명">
+                      <Input
+                        value={editDraft.account}
+                        onChange={(event) => updateEditDraft("account", event.target.value)}
+                        placeholder="생활비카드"
+                      />
+                    </Field>
+                    <Field label="사용처">
+                      <Input
+                        value={editDraft.merchant}
+                        onChange={(event) => updateEditDraft("merchant", event.target.value)}
+                        placeholder="예: 이마트"
+                      />
+                    </Field>
+                    <Field label="카테고리">
+                      <Input
+                        value={editDraft.category}
+                        onChange={(event) => updateEditDraft("category", event.target.value)}
+                        placeholder="예: 생활/마트"
+                      />
+                    </Field>
+                    <Field label="금액">
+                      <Input
+                        type="number"
+                        min="0"
+                        inputMode="numeric"
+                        value={editDraft.amount}
+                        onChange={(event) => updateEditDraft("amount", event.target.value)}
+                        placeholder="0"
+                      />
+                    </Field>
+                  </div>
+                  <Field label="메모">
+                    <Textarea
+                      className="min-h-24"
+                      value={editDraft.memo}
+                      onChange={(event) => updateEditDraft("memo", event.target.value)}
+                      placeholder="거래 메모를 남겨주세요."
+                    />
+                  </Field>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-slate-500">{editNotice}</p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="secondary" onClick={cancelEditTransaction}>
+                        <X className="h-4 w-4" />
+                        취소
+                      </Button>
+                      <Button type="submit">
+                        <Save className="h-4 w-4" />
+                        저장
+                      </Button>
+                    </div>
+                  </div>
+                </form>
+              )}
+            </Card>
+
+            <Card>
+              <div className="mb-5 flex items-center gap-3">
                 <CalendarDays className="h-5 w-5 text-blue-600" />
                 <div>
                   <h2 className="text-lg font-bold text-slate-950">거래별 메모</h2>
@@ -2377,12 +2599,12 @@ export default function Home() {
                 </div>
               </div>
               <div className="grid gap-3">
-                {recentTransactions.length === 0 && (
+                {sortedFilteredTransactions.length === 0 && (
                   <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
                     선택 기간 거래가 없습니다.
                   </div>
                 )}
-                {recentTransactions.map((transaction) => (
+                {sortedFilteredTransactions.map((transaction) => (
                   <div
                     key={transaction.id}
                     className="grid gap-3 rounded-md border border-slate-200 bg-white p-3"
@@ -2397,7 +2619,25 @@ export default function Home() {
                           {transaction.category}
                         </p>
                       </div>
-                      <Badge tone="slate">{transaction.type}</Badge>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone="slate">{transaction.type}</Badge>
+                        <Button
+                          className="min-h-8 px-3 py-1 text-xs"
+                          variant="secondary"
+                          onClick={() => startEditTransaction(transaction)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          수정
+                        </Button>
+                        <Button
+                          className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                          variant="ghost"
+                          onClick={() => deleteTransaction(transaction)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          삭제
+                        </Button>
+                      </div>
                     </div>
                     <Textarea
                       value={transaction.memo}
