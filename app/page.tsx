@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import type {
   Account,
+  Budget,
   Owner,
   Transaction,
   TransactionType
@@ -161,6 +162,51 @@ const initialAccounts: Account[] = [
   }
 ];
 
+const initialBudgets: Budget[] = [
+  {
+    id: "budget-001",
+    category: "식비",
+    monthlyLimit: 500000,
+    memo: "외식과 장보기 식재료"
+  },
+  {
+    id: "budget-002",
+    category: "생활/마트",
+    monthlyLimit: 400000,
+    memo: "생활용품과 마트"
+  },
+  {
+    id: "budget-003",
+    category: "카페/간식",
+    monthlyLimit: 150000,
+    memo: "커피와 간식"
+  },
+  {
+    id: "budget-004",
+    category: "교통",
+    monthlyLimit: 250000,
+    memo: "주유와 대중교통"
+  },
+  {
+    id: "budget-005",
+    category: "육아/의료",
+    monthlyLimit: 300000,
+    memo: "병원, 약국, 아이 관련 지출"
+  },
+  {
+    id: "budget-006",
+    category: "주거",
+    monthlyLimit: 700000,
+    memo: "관리비와 주거 고정비"
+  },
+  {
+    id: "budget-007",
+    category: "기타",
+    monthlyLimit: 200000,
+    memo: "분류 전 기타 지출"
+  }
+];
+
 const chartColors = ["#2563eb", "#14b8a6", "#f97316", "#db2777", "#64748b", "#16a34a"];
 const ownerOptions: Owner[] = ["남편", "아내", "공동"];
 const typeOptions: TransactionType[] = ["카드", "계좌", "현금"];
@@ -173,7 +219,8 @@ const SAMPLE_BASE_DATE = "2026-05-16";
 const STORAGE_KEYS = {
   transactions: "couple-finance-dashboard.transactions.v1",
   periodMemo: "couple-finance-dashboard.periodMemo.v1",
-  accounts: "couple-finance-dashboard.accounts.v1"
+  accounts: "couple-finance-dashboard.accounts.v1",
+  budgets: "couple-finance-dashboard.budgets.v1"
 } as const;
 const DEFAULT_PERIOD_MEMO =
   "이번 기간은 주거비와 생활/마트 지출이 컸다. 다음 기간은 식비 예산을 먼저 확인하고 장보기 횟수를 줄여보기.";
@@ -219,6 +266,24 @@ type AccountDraft = {
 };
 
 type AccountFormMode = "idle" | "add" | "edit";
+
+type BudgetDraft = {
+  category: string;
+  monthlyLimit: string;
+  memo: string;
+};
+
+type BudgetFormMode = "idle" | "add" | "edit";
+
+type BudgetUsageRow = {
+  id: string;
+  category: string;
+  spent: number;
+  monthlyLimit: number | null;
+  memo: string;
+  usageRate: number | null;
+  status: "safe" | "warning" | "over" | "unset";
+};
 
 type ParsedNotificationSuccess = {
   line: string;
@@ -313,6 +378,12 @@ const emptyAccountDraft: AccountDraft = {
   bank: "",
   balance: "",
   status: "수기 입력",
+  memo: ""
+};
+
+const emptyBudgetDraft: BudgetDraft = {
+  category: "",
+  monthlyLimit: "",
   memo: ""
 };
 
@@ -452,6 +523,23 @@ function isAccount(value: unknown): value is Account {
   );
 }
 
+function isBudget(value: unknown): value is Budget {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Budget>;
+
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.category === "string" &&
+    typeof candidate.monthlyLimit === "number" &&
+    Number.isFinite(candidate.monthlyLimit) &&
+    candidate.monthlyLimit >= 0 &&
+    typeof candidate.memo === "string"
+  );
+}
+
 function parseStoredTransactions(value: string | null) {
   if (!value) {
     return null;
@@ -473,6 +561,19 @@ function parseStoredAccounts(value: string | null) {
   try {
     const parsed: unknown = JSON.parse(value);
     return Array.isArray(parsed) && parsed.every(isAccount) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredBudgets(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every(isBudget) ? parsed : null;
   } catch {
     return null;
   }
@@ -1048,6 +1149,50 @@ function getBackupCsvActionTone(action: BackupCsvAction) {
   return "orange";
 }
 
+function getBudgetStatusLabel(status: BudgetUsageRow["status"]) {
+  if (status === "over") {
+    return "초과";
+  }
+
+  if (status === "warning") {
+    return "주의";
+  }
+
+  if (status === "unset") {
+    return "예산 미설정";
+  }
+
+  return "정상";
+}
+
+function getBudgetStatusTone(status: BudgetUsageRow["status"]) {
+  if (status === "over" || status === "warning") {
+    return "orange";
+  }
+
+  if (status === "unset") {
+    return "slate";
+  }
+
+  return "green";
+}
+
+function getBudgetBarColor(status: BudgetUsageRow["status"]) {
+  if (status === "over") {
+    return "bg-red-500";
+  }
+
+  if (status === "warning") {
+    return "bg-orange-500";
+  }
+
+  if (status === "unset") {
+    return "bg-slate-300";
+  }
+
+  return "bg-blue-600";
+}
+
 function Card({
   children,
   className
@@ -1295,6 +1440,11 @@ export default function Home() {
   const [accountNotice, setAccountNotice] = useState(
     "은행 API 연동 전까지 잔고를 수기로 관리합니다."
   );
+  const [budgets, setBudgets] = useState<Budget[]>(initialBudgets);
+  const [budgetFormMode, setBudgetFormMode] = useState<BudgetFormMode>("idle");
+  const [editingBudgetId, setEditingBudgetId] = useState<string | null>(null);
+  const [budgetDraft, setBudgetDraft] = useState<BudgetDraft>(emptyBudgetDraft);
+  const [budgetNotice, setBudgetNotice] = useState("월간 카테고리별 예산을 관리합니다.");
   const [periodMemo, setPeriodMemo] = useState(DEFAULT_PERIOD_MEMO);
   const [notificationText, setNotificationText] = useState("");
   const [parsedNotificationRows, setParsedNotificationRows] = useState<ParsedNotificationRow[]>([]);
@@ -1362,6 +1512,55 @@ export default function Home() {
     periodFilter.endDate
   )}`;
   const topCategory = categoryData[0];
+  const budgetUsageRows = useMemo<BudgetUsageRow[]>(() => {
+    const categorySpendMap = new Map(categoryData.map((category) => [category.name, category.amount]));
+    const budgetMap = new Map(budgets.map((budget) => [budget.category, budget]));
+    const categories = Array.from(
+      new Set([...budgets.map((budget) => budget.category), ...categoryData.map((category) => category.name)])
+    );
+
+    return categories
+      .map((category) => {
+        const budget = budgetMap.get(category);
+        const spent = categorySpendMap.get(category) ?? 0;
+        const monthlyLimit = budget?.monthlyLimit ?? null;
+        const usageRate =
+          monthlyLimit && monthlyLimit > 0 ? Math.round((spent / monthlyLimit) * 100) : null;
+        const status: BudgetUsageRow["status"] =
+          monthlyLimit === null
+            ? "unset"
+            : usageRate !== null && usageRate >= 100
+              ? "over"
+              : usageRate !== null && usageRate >= 80
+                ? "warning"
+                : "safe";
+
+        return {
+          category,
+          id: budget?.id ?? `unbudgeted-${category}`,
+          memo: budget?.memo ?? "",
+          monthlyLimit,
+          spent,
+          status,
+          usageRate
+        };
+      })
+      .sort((a, b) => {
+        const statusWeight = { over: 0, warning: 1, unset: 2, safe: 3 };
+        return statusWeight[a.status] - statusWeight[b.status] || b.spent - a.spent;
+      });
+  }, [budgets, categoryData]);
+  const topBudgetUsage =
+    budgetUsageRows.find((row) => row.monthlyLimit !== null && row.spent > 0) ??
+    budgetUsageRows.find((row) => row.monthlyLimit !== null);
+  const budgetReportLine = topBudgetUsage
+    ? topBudgetUsage.status === "over"
+      ? `${topBudgetUsage.category} 예산을 초과했습니다.`
+      : `${topBudgetUsage.category} 예산의 ${topBudgetUsage.usageRate ?? 0}%를 사용했습니다.`
+    : "카테고리 예산이 아직 설정되지 않았습니다.";
+  const budgetWarningCount = budgetUsageRows.filter(
+    (row) => row.status === "warning" || row.status === "over"
+  ).length;
   const husbandSpending = ownerData.find((owner) => owner.name === "남편")?.amount ?? 0;
   const wifeSpending = ownerData.find((owner) => owner.name === "아내")?.amount ?? 0;
   const sharedSpending = ownerData.find((owner) => owner.name === "공동")?.amount ?? 0;
@@ -1381,6 +1580,9 @@ export default function Home() {
     "가장 큰 카테고리:",
     topCategory ? `${topCategory.name} ${formatKRW(topCategory.amount)}` : "데이터 없음 0원",
     "",
+    "예산 상태:",
+    budgetReportLine,
+    "",
     "메모:",
     periodMemo.trim() || "작성된 기간 메모가 없습니다.",
     "",
@@ -1393,6 +1595,7 @@ export default function Home() {
     topCategory
       ? `가장 큰 카테고리는 ${topCategory.name}이며 ${formatKRW(topCategory.amount)}를 사용했습니다.`
       : "아직 카테고리 데이터가 없습니다.",
+    budgetReportLine,
     `카드 결제예정액은 ${formatKRW(scheduledCardPayment)}입니다.`,
     "금융 API와 구글시트 직접 연동은 다음 단계에서 연결합니다."
   ];
@@ -1426,6 +1629,7 @@ export default function Home() {
     );
     const storedMemo = parseStoredMemo(window.localStorage.getItem(STORAGE_KEYS.periodMemo));
     const storedAccounts = parseStoredAccounts(window.localStorage.getItem(STORAGE_KEYS.accounts));
+    const storedBudgets = parseStoredBudgets(window.localStorage.getItem(STORAGE_KEYS.budgets));
 
     if (storedTransactions) {
       setTransactions(storedTransactions);
@@ -1439,8 +1643,12 @@ export default function Home() {
       setAccounts(storedAccounts);
     }
 
+    if (storedBudgets) {
+      setBudgets(storedBudgets);
+    }
+
     setStorageNotice(
-      storedTransactions || storedMemo !== null || storedAccounts
+      storedTransactions || storedMemo !== null || storedAccounts || storedBudgets
         ? "저장된 데이터를 불러왔습니다."
         : "샘플 데이터로 시작했습니다. 변경사항은 이 브라우저에 저장됩니다."
     );
@@ -1484,6 +1692,18 @@ export default function Home() {
   }, [accounts, storageReady]);
 
   useEffect(() => {
+    if (!storageReady || typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.budgets, JSON.stringify(budgets));
+    } catch {
+      setStorageNotice("예산 정보를 브라우저 저장소에 저장하지 못했습니다.");
+    }
+  }, [budgets, storageReady]);
+
+  useEffect(() => {
     if (!resetStorageToken || typeof window === "undefined") {
       return;
     }
@@ -1492,6 +1712,7 @@ export default function Home() {
       window.localStorage.removeItem(STORAGE_KEYS.transactions);
       window.localStorage.removeItem(STORAGE_KEYS.periodMemo);
       window.localStorage.removeItem(STORAGE_KEYS.accounts);
+      window.localStorage.removeItem(STORAGE_KEYS.budgets);
     } catch {
       setStorageNotice("브라우저 저장소 초기화 중 오류가 있었지만 화면 데이터는 복구했습니다.");
     }
@@ -1546,6 +1767,13 @@ export default function Home() {
     setAccountDraft((current) => ({ ...current, [key]: value }));
   }
 
+  function updateBudgetDraft<K extends keyof BudgetDraft>(
+    key: K,
+    value: BudgetDraft[K]
+  ) {
+    setBudgetDraft((current) => ({ ...current, [key]: value }));
+  }
+
   function startAddAccount() {
     setAccountFormMode("add");
     setEditingAccountId(null);
@@ -1572,6 +1800,31 @@ export default function Home() {
     setEditingAccountId(null);
     setAccountDraft(emptyAccountDraft);
     setAccountNotice("계좌 수정을 취소했습니다.");
+  }
+
+  function startAddBudget() {
+    setBudgetFormMode("add");
+    setEditingBudgetId(null);
+    setBudgetDraft(emptyBudgetDraft);
+    setBudgetNotice("새 카테고리 예산을 입력해주세요.");
+  }
+
+  function startEditBudget(budget: Budget) {
+    setBudgetFormMode("edit");
+    setEditingBudgetId(budget.id);
+    setBudgetDraft({
+      category: budget.category,
+      monthlyLimit: String(budget.monthlyLimit),
+      memo: budget.memo
+    });
+    setBudgetNotice(`${budget.category} 예산을 수정 중입니다.`);
+  }
+
+  function cancelBudgetForm() {
+    setBudgetFormMode("idle");
+    setEditingBudgetId(null);
+    setBudgetDraft(emptyBudgetDraft);
+    setBudgetNotice("예산 수정을 취소했습니다.");
   }
 
   function addTransaction(event: FormEvent<HTMLFormElement>) {
@@ -1757,6 +2010,68 @@ export default function Home() {
     }
 
     setAccountNotice(`${account.name} 계좌를 삭제했습니다.`);
+  }
+
+  function saveBudget(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const monthlyLimit = Number(budgetDraft.monthlyLimit);
+    const category = budgetDraft.category.trim();
+
+    if (!category || !Number.isFinite(monthlyLimit) || monthlyLimit <= 0) {
+      setBudgetNotice("카테고리명과 월 예산을 확인해주세요.");
+      return;
+    }
+
+    const duplicatedCategory = budgets.some(
+      (budget) => budget.category === category && budget.id !== editingBudgetId
+    );
+
+    if (duplicatedCategory) {
+      setBudgetNotice("이미 같은 카테고리 예산이 있습니다. 기존 예산을 수정해주세요.");
+      return;
+    }
+
+    const nextBudget: Budget = {
+      category,
+      id: editingBudgetId ?? `budget-${Date.now()}`,
+      memo: budgetDraft.memo.trim(),
+      monthlyLimit
+    };
+
+    if (budgetFormMode === "edit" && editingBudgetId) {
+      setBudgets((current) =>
+        current.map((budget) => (budget.id === editingBudgetId ? nextBudget : budget))
+      );
+      setBudgetNotice(`${nextBudget.category} 예산을 저장했습니다.`);
+    } else {
+      setBudgets((current) => [nextBudget, ...current]);
+      setBudgetNotice(`${nextBudget.category} 예산을 추가했습니다.`);
+    }
+
+    setBudgetFormMode("idle");
+    setEditingBudgetId(null);
+    setBudgetDraft(emptyBudgetDraft);
+  }
+
+  function deleteBudget(budget: Budget) {
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`${budget.category} 월 예산 ${formatKRW(budget.monthlyLimit)}을 삭제할까요?`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    setBudgets((current) => current.filter((item) => item.id !== budget.id));
+
+    if (editingBudgetId === budget.id) {
+      setBudgetFormMode("idle");
+      setEditingBudgetId(null);
+      setBudgetDraft(emptyBudgetDraft);
+    }
+
+    setBudgetNotice(`${budget.category} 예산을 삭제했습니다.`);
   }
 
   function analyzeNotificationText() {
@@ -1972,6 +2287,8 @@ export default function Home() {
       try {
         window.localStorage.removeItem(STORAGE_KEYS.transactions);
         window.localStorage.removeItem(STORAGE_KEYS.periodMemo);
+        window.localStorage.removeItem(STORAGE_KEYS.accounts);
+        window.localStorage.removeItem(STORAGE_KEYS.budgets);
       } catch {
         setStorageNotice("브라우저 저장소 초기화 중 오류가 있었지만 화면 데이터는 복구했습니다.");
       }
@@ -1979,6 +2296,7 @@ export default function Home() {
 
     setTransactions(initialTransactions);
     setAccounts(initialAccounts);
+    setBudgets(initialBudgets);
     setPeriodMemo(DEFAULT_PERIOD_MEMO);
     setEditingTransactionId(null);
     setEditDraft(emptyDraft);
@@ -1987,6 +2305,10 @@ export default function Home() {
     setEditingAccountId(null);
     setAccountDraft(emptyAccountDraft);
     setAccountNotice("샘플 계좌 정보로 초기화했습니다.");
+    setBudgetFormMode("idle");
+    setEditingBudgetId(null);
+    setBudgetDraft(emptyBudgetDraft);
+    setBudgetNotice("샘플 예산 정보로 초기화했습니다.");
     setFormNotice("샘플 데이터로 초기화했습니다.");
     setStorageNotice("데이터를 초기화하고 샘플 데이터로 복구했습니다.");
     setResetStorageToken((current) => current + 1);
@@ -2121,6 +2443,61 @@ export default function Home() {
               tone="slate"
             />
           </section>
+
+          <Card>
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">이번 달 예산 진행률</h2>
+                <p className="text-sm text-slate-500">
+                  선택 기간 지출을 월간 카테고리 예산과 비교합니다.
+                </p>
+              </div>
+              <Badge tone={budgetWarningCount > 0 ? "orange" : "green"}>
+                {budgetWarningCount > 0 ? `주의 ${budgetWarningCount}개` : "정상"}
+              </Badge>
+            </div>
+
+            <div className="grid gap-3">
+              {budgetUsageRows.length === 0 && (
+                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                  예산 데이터가 없습니다.
+                </div>
+              )}
+              {budgetUsageRows.map((row) => {
+                const progress = Math.min(row.usageRate ?? 0, 100);
+
+                return (
+                  <div key={row.id} className="grid gap-2 rounded-md border border-slate-200 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-950">{row.category}</p>
+                        <p className="text-sm text-slate-500">
+                          {formatKRW(row.spent)} /{" "}
+                          {row.monthlyLimit === null
+                            ? "예산 미설정"
+                            : formatKRW(row.monthlyLimit)}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone={getBudgetStatusTone(row.status)}>
+                          {getBudgetStatusLabel(row.status)}
+                        </Badge>
+                        <span className="text-sm font-bold text-slate-700">
+                          {row.usageRate === null ? "-" : `${row.usageRate}%`}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="h-2.5 overflow-hidden rounded-full bg-slate-100">
+                      <div
+                        className={cn("h-full rounded-full", getBudgetBarColor(row.status))}
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
 
           <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
             <Card>
@@ -2968,6 +3345,109 @@ export default function Home() {
                   <p className="text-sm text-slate-500">{accountNotice}</p>
                   <div className="flex flex-wrap gap-2">
                     <Button variant="secondary" onClick={cancelAccountForm}>
+                      <X className="h-4 w-4" />
+                      취소
+                    </Button>
+                    <Button type="submit">
+                      <Save className="h-4 w-4" />
+                      저장
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </Card>
+
+          <Card>
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-center gap-3">
+                <TrendingUp className="h-5 w-5 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">예산 관리</h2>
+                  <p className="text-sm text-slate-500">
+                    월간 카테고리별 예산을 설정하고 초과 위험을 확인합니다.
+                  </p>
+                </div>
+              </div>
+              <Button onClick={startAddBudget}>
+                <Plus className="h-4 w-4" />
+                예산 추가
+              </Button>
+            </div>
+
+            <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {budgets.map((budget) => (
+                <div key={budget.id} className="grid gap-3 rounded-md border border-slate-200 p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="font-bold text-slate-950">{budget.category}</p>
+                      <p className="text-sm text-slate-500">{formatKRW(budget.monthlyLimit)}</p>
+                      {budget.memo && (
+                        <p className="mt-1 text-xs font-semibold text-slate-400">{budget.memo}</p>
+                      )}
+                    </div>
+                    <Badge tone="blue">월 예산</Badge>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      className="min-h-8 px-3 py-1 text-xs"
+                      variant="secondary"
+                      onClick={() => startEditBudget(budget)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      수정
+                    </Button>
+                    <Button
+                      className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                      variant="ghost"
+                      onClick={() => deleteBudget(budget)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      삭제
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {budgetFormMode === "idle" && (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                예산 카드의 수정 버튼을 누르거나 새 예산을 추가해주세요.
+              </div>
+            )}
+
+            {budgetFormMode !== "idle" && (
+              <form className="grid gap-4" onSubmit={saveBudget}>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Field label="카테고리명">
+                    <Input
+                      value={budgetDraft.category}
+                      onChange={(event) => updateBudgetDraft("category", event.target.value)}
+                      placeholder="예: 식비"
+                    />
+                  </Field>
+                  <Field label="월 예산">
+                    <Input
+                      type="number"
+                      min="0"
+                      inputMode="numeric"
+                      value={budgetDraft.monthlyLimit}
+                      onChange={(event) => updateBudgetDraft("monthlyLimit", event.target.value)}
+                      placeholder="0"
+                    />
+                  </Field>
+                  <Field label="메모">
+                    <Input
+                      value={budgetDraft.memo}
+                      onChange={(event) => updateBudgetDraft("memo", event.target.value)}
+                      placeholder="예: 외식 포함"
+                    />
+                  </Field>
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-500">{budgetNotice}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={cancelBudgetForm}>
                       <X className="h-4 w-4" />
                       취소
                     </Button>

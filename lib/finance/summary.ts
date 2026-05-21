@@ -23,6 +23,13 @@ export type Account = {
   memo?: string;
 };
 
+export type Budget = {
+  id: string;
+  category: string;
+  monthlyLimit: number;
+  memo: string;
+};
+
 export type NamedAmount = {
   name: string;
   amount: number;
