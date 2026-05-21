@@ -22,6 +22,7 @@ import {
   Database,
   FileSpreadsheet,
   FileText,
+  FileUp,
   Landmark,
   Pencil,
   Plug,
@@ -214,6 +215,29 @@ type ParsedNotificationIssue = {
 };
 
 type ParsedNotificationRow = ParsedNotificationSuccess | ParsedNotificationIssue;
+
+type ParsedCsvSuccess = {
+  rowNumber: number;
+  status: "parsed";
+  date: string;
+  owner: Owner;
+  type: "카드";
+  account: string;
+  merchant: string;
+  category: string;
+  amount: number;
+  memo: string;
+  duplicate: boolean;
+};
+
+type ParsedCsvIssue = {
+  raw: string;
+  reason: string;
+  rowNumber: number;
+  status: "failed";
+};
+
+type ParsedCsvRow = ParsedCsvSuccess | ParsedCsvIssue;
 
 const emptyDraft: DraftTransaction = {
   date: SAMPLE_BASE_DATE,
@@ -511,6 +535,238 @@ function parseNotificationText(text: string, transactions: Transaction[]): Parse
   });
 }
 
+function parseCsvTable(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const nextChar = text[index + 1];
+
+    if (char === "\"") {
+      if (quoted && nextChar === "\"") {
+        cell += "\"";
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+      continue;
+    }
+
+    if (char === "," && !quoted) {
+      row.push(cell.trim());
+      cell = "";
+      continue;
+    }
+
+    if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && nextChar === "\n") {
+        index += 1;
+      }
+      row.push(cell.trim());
+      if (row.some(Boolean)) {
+        rows.push(row);
+      }
+      row = [];
+      cell = "";
+      continue;
+    }
+
+    cell += char;
+  }
+
+  row.push(cell.trim());
+  if (row.some(Boolean)) {
+    rows.push(row);
+  }
+
+  return rows;
+}
+
+function normalizeCsvHeader(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, "");
+}
+
+function findCsvColumn(headers: string[], candidates: string[]) {
+  const normalizedCandidates = candidates.map(normalizeCsvHeader);
+  return headers.findIndex((header) => normalizedCandidates.includes(normalizeCsvHeader(header)));
+}
+
+function readCsvCell(row: string[], index: number) {
+  return index >= 0 ? (row[index] ?? "").trim() : "";
+}
+
+function alignCsvRow(row: string[], headerCount: number, amountIndex: number) {
+  if (row.length <= headerCount || amountIndex < 0) {
+    return row;
+  }
+
+  const overflowCount = row.length - headerCount;
+
+  return [
+    ...row.slice(0, amountIndex),
+    row.slice(amountIndex, amountIndex + overflowCount + 1).join(","),
+    ...row.slice(amountIndex + overflowCount + 1)
+  ];
+}
+
+function normalizeCsvDate(value: string) {
+  const trimmed = value.trim();
+  const fullDateMatch = trimmed.match(/^(\d{4})[-./년\s]+(\d{1,2})[-./월\s]+(\d{1,2})/);
+
+  if (fullDateMatch) {
+    const [, yearText, monthText, dayText] = fullDateMatch;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+
+    if (isValidFullDate(year, month, day)) {
+      return `${year}-${`${month}`.padStart(2, "0")}-${`${day}`.padStart(2, "0")}`;
+    }
+  }
+
+  const compactDateMatch = trimmed.match(/^(\d{4})(\d{2})(\d{2})$/);
+
+  if (compactDateMatch) {
+    const [, yearText, monthText, dayText] = compactDateMatch;
+    const year = Number(yearText);
+    const month = Number(monthText);
+    const day = Number(dayText);
+
+    if (isValidFullDate(year, month, day)) {
+      return `${year}-${monthText}-${dayText}`;
+    }
+  }
+
+  const shortDateMatch = trimmed.match(/^(\d{1,2})[-./](\d{1,2})$/);
+
+  if (shortDateMatch) {
+    const [, monthText, dayText] = shortDateMatch;
+    const month = Number(monthText);
+    const day = Number(dayText);
+
+    if (isValidNotificationDate(month, day)) {
+      return formatNotificationDate(month, day);
+    }
+  }
+
+  return null;
+}
+
+function isValidFullDate(year: number, month: number, day: number) {
+  const parsed = new Date(year, month - 1, day);
+
+  return (
+    Number.isInteger(year) &&
+    Number.isInteger(month) &&
+    Number.isInteger(day) &&
+    parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === day
+  );
+}
+
+function normalizeCsvAmount(value: string) {
+  const normalized = value.replace(/[,\s원₩]/g, "").replace(/^\+/, "");
+  const amount = Number(normalized);
+
+  return Number.isFinite(amount) && amount > 0 ? amount : null;
+}
+
+function parseCsvText(text: string, transactions: Transaction[]): ParsedCsvRow[] {
+  const table = parseCsvTable(text.replace(/^\uFEFF/, ""));
+
+  if (table.length < 2) {
+    return [
+      {
+        raw: text.trim(),
+        reason: "헤더와 데이터 행을 찾을 수 없음",
+        rowNumber: 1,
+        status: "failed"
+      }
+    ];
+  }
+
+  const [headers, ...rows] = table;
+  const dateIndex = findCsvColumn(headers, ["날짜", "이용일", "승인일", "거래일", "date"]);
+  const merchantIndex = findCsvColumn(headers, ["사용처", "가맹점", "이용가맹점", "merchant", "내용"]);
+  const amountIndex = findCsvColumn(headers, ["금액", "이용금액", "승인금액", "amount"]);
+  const accountIndex = findCsvColumn(headers, ["카드", "카드명", "account", "결제수단"]);
+  const memoIndex = findCsvColumn(headers, ["메모", "memo", "비고"]);
+
+  if (dateIndex < 0 || merchantIndex < 0 || amountIndex < 0) {
+    return [
+      {
+        raw: headers.join(", "),
+        reason: "필수 컬럼(날짜, 사용처, 금액)을 찾을 수 없음",
+        rowNumber: 1,
+        status: "failed"
+      }
+    ];
+  }
+
+  const existingKeys = new Set(transactions.map((transaction) => getTransactionKey(transaction)));
+  const batchKeys = new Set<string>();
+
+  return rows.map((rawRow, index) => {
+    const row = alignCsvRow(rawRow, headers.length, amountIndex);
+    const rowNumber = index + 2;
+    const raw = rawRow.join(", ");
+    const date = normalizeCsvDate(readCsvCell(row, dateIndex));
+    const merchant = readCsvCell(row, merchantIndex);
+    const amount = normalizeCsvAmount(readCsvCell(row, amountIndex));
+    const account = readCsvCell(row, accountIndex) || "카드";
+    const memo = readCsvCell(row, memoIndex) || "CSV 가져오기";
+
+    if (!date) {
+      return {
+        raw,
+        reason: "날짜를 YYYY-MM-DD 형식으로 정규화할 수 없음",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    if (!merchant) {
+      return {
+        raw,
+        reason: "사용처를 찾을 수 없음",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    if (amount === null) {
+      return {
+        raw,
+        reason: "금액을 숫자로 변환할 수 없음",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    const key = getTransactionKey({ account, amount, date, merchant });
+    const duplicate = existingKeys.has(key) || batchKeys.has(key);
+    batchKeys.add(key);
+
+    return {
+      account,
+      amount,
+      category: inferNotificationCategory(merchant),
+      date,
+      duplicate,
+      memo,
+      merchant,
+      owner: inferNotificationOwner(account),
+      rowNumber,
+      status: "parsed",
+      type: "카드"
+    };
+  });
+}
+
 function Card({
   children,
   className
@@ -752,6 +1008,10 @@ export default function Home() {
   const [notificationText, setNotificationText] = useState("");
   const [parsedNotificationRows, setParsedNotificationRows] = useState<ParsedNotificationRow[]>([]);
   const [importNotice, setImportNotice] = useState("붙여넣은 카드 승인 알림을 분석해주세요.");
+  const [csvFileName, setCsvFileName] = useState("");
+  const [parsedCsvRows, setParsedCsvRows] = useState<ParsedCsvRow[]>([]);
+  const [csvImportNotice, setCsvImportNotice] =
+    useState("CSV 파일을 선택하면 브라우저에서만 분석합니다.");
   const [formNotice, setFormNotice] = useState("샘플 데이터로 시작했습니다.");
   const [connectorNotice, setConnectorNotice] = useState("아직 외부 API는 연결하지 않았습니다.");
   const [storageNotice, setStorageNotice] = useState("브라우저 저장소와 동기화 준비 중입니다.");
@@ -813,6 +1073,11 @@ export default function Home() {
   const issueNotificationRows = parsedNotificationRows.filter(
     (row): row is ParsedNotificationIssue => row.status !== "parsed"
   );
+  const parsedCsvSuccessRows = parsedCsvRows.filter(
+    (row): row is ParsedCsvSuccess => row.status === "parsed"
+  );
+  const addableCsvRows = parsedCsvSuccessRows.filter((row) => !row.duplicate);
+  const failedCsvRows = parsedCsvRows.filter((row): row is ParsedCsvIssue => row.status === "failed");
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -989,6 +1254,77 @@ export default function Home() {
       current.map((row) => (row.status === "parsed" ? { ...row, duplicate: true } : row))
     );
     setImportNotice(`${nextTransactions.length}건을 거래내역에 추가했습니다.`);
+  }
+
+  function handleCsvFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (typeof FileReader === "undefined") {
+      setCsvImportNotice("이 브라우저에서는 CSV 파일 읽기를 사용할 수 없습니다.");
+      return;
+    }
+
+    setCsvFileName(file.name);
+    setCsvImportNotice(`${file.name} 파일을 읽는 중입니다.`);
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        setParsedCsvRows([]);
+        setCsvImportNotice("CSV 파일 내용을 텍스트로 읽지 못했습니다.");
+        return;
+      }
+
+      const rows = parseCsvText(reader.result, transactions);
+      const parsedCount = rows.filter((row) => row.status === "parsed").length;
+      const addableCount = rows.filter((row) => row.status === "parsed" && !row.duplicate).length;
+      const duplicateCount = rows.filter((row) => row.status === "parsed" && row.duplicate).length;
+      const failedCount = rows.filter((row) => row.status === "failed").length;
+
+      setParsedCsvRows(rows);
+      setCsvImportNotice(
+        `분석 완료: 정상 ${parsedCount}건, 추가 가능 ${addableCount}건, 중복 ${duplicateCount}건, 실패 ${failedCount}건`
+      );
+    };
+
+    reader.onerror = () => {
+      setParsedCsvRows([]);
+      setCsvImportNotice("CSV 파일을 읽는 중 오류가 발생했습니다.");
+    };
+
+    reader.readAsText(file, "utf-8");
+    event.target.value = "";
+  }
+
+  function addParsedCsvRowsToTransactions() {
+    const timestamp = Date.now();
+    const nextTransactions = addableCsvRows.map<Transaction>((row, index) => ({
+      account: row.account,
+      amount: row.amount,
+      category: row.category,
+      date: row.date,
+      id: `tx-import-${timestamp}-${index}`,
+      memo: row.memo,
+      merchant: row.merchant,
+      owner: row.owner,
+      type: row.type
+    }));
+
+    if (nextTransactions.length === 0) {
+      setCsvImportNotice("추가할 새 CSV 거래가 없습니다. 중복 또는 실패 항목만 있습니다.");
+      return;
+    }
+
+    setTransactions((current) => [...nextTransactions, ...current]);
+    setParsedCsvRows((current) =>
+      current.map((row) => (row.status === "parsed" ? { ...row, duplicate: true } : row))
+    );
+    setCsvImportNotice(`${nextTransactions.length}건을 거래내역에 추가했습니다.`);
   }
 
   function resetStoredData() {
@@ -1560,6 +1896,109 @@ export default function Home() {
                           <span className="text-slate-500">{row.status}</span>
                         </div>
                         <p className="break-words text-slate-700">{row.line}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            <Card>
+              <div className="mb-5 flex items-center gap-3">
+                <FileUp className="h-5 w-5 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">CSV 가져오기</h2>
+                  <p className="text-sm text-slate-500">
+                    카드사 사용내역 CSV를 서버 업로드 없이 브라우저에서 분석합니다.
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-4">
+                <Field label="CSV 파일">
+                  <Input type="file" accept=".csv,text/csv" onChange={handleCsvFileChange} />
+                </Field>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="grid gap-1">
+                    <p className="text-sm text-slate-500">{csvImportNotice}</p>
+                    {csvFileName && (
+                      <p className="text-xs font-semibold text-slate-400">{csvFileName}</p>
+                    )}
+                  </div>
+                  <Button disabled={addableCsvRows.length === 0} onClick={addParsedCsvRowsToTransactions}>
+                    거래내역에 추가
+                  </Button>
+                </div>
+
+                <div>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <p className="text-sm font-bold text-slate-700">CSV 분석 결과 미리보기</p>
+                    <Badge tone="blue">{parsedCsvSuccessRows.length}건</Badge>
+                  </div>
+                  <div className="overflow-x-auto rounded-md border border-slate-200">
+                    <table className="w-full min-w-[820px] border-separate border-spacing-0 text-left text-sm">
+                      <thead>
+                        <tr className="bg-slate-50 text-slate-500">
+                          <th className="border-b border-slate-200 px-3 py-3 font-semibold">상태</th>
+                          <th className="border-b border-slate-200 px-3 py-3 font-semibold">행</th>
+                          <th className="border-b border-slate-200 px-3 py-3 font-semibold">날짜</th>
+                          <th className="border-b border-slate-200 px-3 py-3 font-semibold">카드</th>
+                          <th className="border-b border-slate-200 px-3 py-3 font-semibold">사용처</th>
+                          <th className="border-b border-slate-200 px-3 py-3 font-semibold">분류</th>
+                          <th className="border-b border-slate-200 px-3 py-3 font-semibold">소유</th>
+                          <th className="border-b border-slate-200 px-3 py-3 text-right font-semibold">금액</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {parsedCsvSuccessRows.length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
+                              CSV 분석 결과가 없습니다.
+                            </td>
+                          </tr>
+                        )}
+                        {parsedCsvSuccessRows.map((row, index) => (
+                          <tr
+                            key={`${row.rowNumber}-${row.date}-${row.account}-${row.merchant}-${index}`}
+                            className="text-slate-700"
+                          >
+                            <td className="border-b border-slate-100 px-3 py-3">
+                              <Badge tone={row.duplicate ? "orange" : "green"}>
+                                {row.duplicate ? "중복" : "추가 가능"}
+                              </Badge>
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-3">
+                              {row.rowNumber}
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-3">{row.date}</td>
+                            <td className="border-b border-slate-100 px-3 py-3">{row.account}</td>
+                            <td className="border-b border-slate-100 px-3 py-3 font-semibold text-slate-900">
+                              {row.merchant}
+                            </td>
+                            <td className="border-b border-slate-100 px-3 py-3">{row.category}</td>
+                            <td className="border-b border-slate-100 px-3 py-3">{row.owner}</td>
+                            <td className="border-b border-slate-100 px-3 py-3 text-right font-bold text-slate-950">
+                              {formatKRW(row.amount)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {failedCsvRows.length > 0 && (
+                  <div className="grid gap-2 rounded-md bg-slate-50 p-4">
+                    <p className="text-sm font-bold text-slate-700">실패한 행</p>
+                    {failedCsvRows.map((row, index) => (
+                      <div
+                        key={`${row.rowNumber}-${row.reason}-${index}`}
+                        className="grid gap-1 rounded-md border border-slate-200 bg-white p-3 text-sm"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone="slate">{row.rowNumber}행</Badge>
+                          <span className="font-semibold text-slate-700">{row.reason}</span>
+                        </div>
+                        <p className="break-words text-slate-500">{row.raw || "(빈 행)"}</p>
                       </div>
                     ))}
                   </div>
