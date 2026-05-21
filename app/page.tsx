@@ -20,6 +20,7 @@ import {
   CheckCircle2,
   CreditCard,
   Database,
+  Download,
   FileSpreadsheet,
   FileText,
   FileUp,
@@ -238,6 +239,36 @@ type ParsedCsvIssue = {
 };
 
 type ParsedCsvRow = ParsedCsvSuccess | ParsedCsvIssue;
+
+type BackupCsvAction = "add" | "update" | "duplicate";
+
+type ParsedBackupCsvSuccess = {
+  rowNumber: number;
+  status: "parsed";
+  action: BackupCsvAction;
+  transaction: Transaction;
+};
+
+type ParsedBackupCsvIssue = {
+  raw: string;
+  reason: string;
+  rowNumber: number;
+  status: "failed";
+};
+
+type ParsedBackupCsvRow = ParsedBackupCsvSuccess | ParsedBackupCsvIssue;
+
+const backupCsvColumns = [
+  "id",
+  "date",
+  "owner",
+  "type",
+  "account",
+  "merchant",
+  "category",
+  "amount",
+  "memo"
+] as const;
 
 const emptyDraft: DraftTransaction = {
   date: SAMPLE_BASE_DATE,
@@ -767,6 +798,210 @@ function parseCsvText(text: string, transactions: Transaction[]): ParsedCsvRow[]
   });
 }
 
+function getTodayFileDate() {
+  return toDateInputValue(new Date());
+}
+
+function escapeCsvValue(value: string | number) {
+  const text = String(value);
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll("\"", "\"\"")}"` : text;
+}
+
+function serializeTransactionsToBackupCsv(transactions: Transaction[]) {
+  const header = backupCsvColumns.join(",");
+  const body = transactions.map((transaction) =>
+    backupCsvColumns
+      .map((column) => escapeCsvValue(transaction[column]))
+      .join(",")
+  );
+
+  return `\uFEFF${[header, ...body].join("\r\n")}`;
+}
+
+function downloadCsvFile(filename: string, csvText: string) {
+  if (typeof window === "undefined" || typeof document === "undefined") {
+    return;
+  }
+
+  const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+function parseBackupCsvText(text: string, transactions: Transaction[]): ParsedBackupCsvRow[] {
+  const table = parseCsvTable(text.replace(/^\uFEFF/, ""));
+
+  if (table.length < 2) {
+    return [
+      {
+        raw: text.trim(),
+        reason: "헤더와 데이터 행을 찾을 수 없음",
+        rowNumber: 1,
+        status: "failed"
+      }
+    ];
+  }
+
+  const [headers, ...rows] = table;
+  const columnIndexes = Object.fromEntries(
+    backupCsvColumns.map((column) => [column, findCsvColumn(headers, [column])])
+  ) as Record<(typeof backupCsvColumns)[number], number>;
+  const missingColumns = backupCsvColumns.filter((column) => columnIndexes[column] < 0);
+
+  if (missingColumns.length > 0) {
+    return [
+      {
+        raw: headers.join(", "),
+        reason: `백업 CSV 필수 컬럼 누락: ${missingColumns.join(", ")}`,
+        rowNumber: 1,
+        status: "failed"
+      }
+    ];
+  }
+
+  const existingById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
+  const existingKeys = new Set(transactions.map((transaction) => getTransactionKey(transaction)));
+  const batchIds = new Set<string>();
+  const batchKeys = new Set<string>();
+
+  return rows.map((rawRow, index) => {
+    const row = alignCsvRow(rawRow, headers.length, columnIndexes.amount);
+    const rowNumber = index + 2;
+    const raw = rawRow.join(", ");
+    const id = readCsvCell(row, columnIndexes.id);
+    const date = normalizeCsvDate(readCsvCell(row, columnIndexes.date));
+    const ownerValue = readCsvCell(row, columnIndexes.owner);
+    const typeValue = readCsvCell(row, columnIndexes.type);
+    const account = readCsvCell(row, columnIndexes.account);
+    const merchant = readCsvCell(row, columnIndexes.merchant);
+    const category = readCsvCell(row, columnIndexes.category);
+    const amount = normalizeCsvAmount(readCsvCell(row, columnIndexes.amount));
+    const memo = readCsvCell(row, columnIndexes.memo);
+
+    if (!id) {
+      return {
+        raw,
+        reason: "id를 찾을 수 없음",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    if (batchIds.has(id)) {
+      return {
+        raw,
+        reason: "같은 id가 CSV 안에 중복됨",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    batchIds.add(id);
+
+    if (!date) {
+      return {
+        raw,
+        reason: "날짜를 YYYY-MM-DD 형식으로 정규화할 수 없음",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    if (!ownerOptions.includes(ownerValue as Owner)) {
+      return {
+        raw,
+        reason: "소유 값은 남편, 아내, 공동 중 하나여야 함",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    if (!typeOptions.includes(typeValue as TransactionType)) {
+      return {
+        raw,
+        reason: "유형 값은 카드, 계좌, 현금 중 하나여야 함",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    if (!account || !merchant || !category) {
+      return {
+        raw,
+        reason: "계좌, 사용처, 카테고리는 비워둘 수 없음",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    if (amount === null) {
+      return {
+        raw,
+        reason: "금액을 숫자로 변환할 수 없음",
+        rowNumber,
+        status: "failed"
+      };
+    }
+
+    const transaction: Transaction = {
+      account,
+      amount,
+      category,
+      date,
+      id,
+      memo,
+      merchant,
+      owner: ownerValue as Owner,
+      type: typeValue as TransactionType
+    };
+    const key = getTransactionKey(transaction);
+    const action: BackupCsvAction = existingById.has(id)
+      ? "update"
+      : existingKeys.has(key) || batchKeys.has(key)
+        ? "duplicate"
+        : "add";
+
+    batchKeys.add(key);
+
+    return {
+      action,
+      rowNumber,
+      status: "parsed",
+      transaction
+    };
+  });
+}
+
+function getBackupCsvActionLabel(action: BackupCsvAction) {
+  if (action === "add") {
+    return "추가 가능";
+  }
+
+  if (action === "update") {
+    return "업데이트";
+  }
+
+  return "중복";
+}
+
+function getBackupCsvActionTone(action: BackupCsvAction) {
+  if (action === "add") {
+    return "green";
+  }
+
+  if (action === "update") {
+    return "blue";
+  }
+
+  return "orange";
+}
+
 function Card({
   children,
   className
@@ -1012,6 +1247,11 @@ export default function Home() {
   const [parsedCsvRows, setParsedCsvRows] = useState<ParsedCsvRow[]>([]);
   const [csvImportNotice, setCsvImportNotice] =
     useState("CSV 파일을 선택하면 브라우저에서만 분석합니다.");
+  const [backupCsvFileName, setBackupCsvFileName] = useState("");
+  const [parsedBackupCsvRows, setParsedBackupCsvRows] = useState<ParsedBackupCsvRow[]>([]);
+  const [backupCsvNotice, setBackupCsvNotice] = useState(
+    "CSV를 구글시트에 업로드해 백업하거나 수기 수정 후 다시 가져올 수 있습니다."
+  );
   const [formNotice, setFormNotice] = useState("샘플 데이터로 시작했습니다.");
   const [connectorNotice, setConnectorNotice] = useState("아직 외부 API는 연결하지 않았습니다.");
   const [storageNotice, setStorageNotice] = useState("브라우저 저장소와 동기화 준비 중입니다.");
@@ -1078,6 +1318,19 @@ export default function Home() {
   );
   const addableCsvRows = parsedCsvSuccessRows.filter((row) => !row.duplicate);
   const failedCsvRows = parsedCsvRows.filter((row): row is ParsedCsvIssue => row.status === "failed");
+  const parsedBackupCsvSuccessRows = parsedBackupCsvRows.filter(
+    (row): row is ParsedBackupCsvSuccess => row.status === "parsed"
+  );
+  const addableBackupCsvRows = parsedBackupCsvSuccessRows.filter((row) => row.action === "add");
+  const updatableBackupCsvRows = parsedBackupCsvSuccessRows.filter(
+    (row) => row.action === "update"
+  );
+  const actionableBackupCsvRows = parsedBackupCsvSuccessRows.filter(
+    (row) => row.action !== "duplicate"
+  );
+  const failedBackupCsvRows = parsedBackupCsvRows.filter(
+    (row): row is ParsedBackupCsvIssue => row.status === "failed"
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1325,6 +1578,87 @@ export default function Home() {
       current.map((row) => (row.status === "parsed" ? { ...row, duplicate: true } : row))
     );
     setCsvImportNotice(`${nextTransactions.length}건을 거래내역에 추가했습니다.`);
+  }
+
+  function exportTransactionsBackupCsv() {
+    const filename = `couple-finance-transactions-${getTodayFileDate()}.csv`;
+    downloadCsvFile(filename, serializeTransactionsToBackupCsv(transactions));
+    setBackupCsvNotice(`${transactions.length}건의 거래내역을 ${filename} 파일로 내보냈습니다.`);
+  }
+
+  function handleBackupCsvFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    if (typeof FileReader === "undefined") {
+      setBackupCsvNotice("이 브라우저에서는 CSV 파일 읽기를 사용할 수 없습니다.");
+      return;
+    }
+
+    setBackupCsvFileName(file.name);
+    setBackupCsvNotice(`${file.name} 파일을 읽는 중입니다.`);
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        setParsedBackupCsvRows([]);
+        setBackupCsvNotice("CSV 파일 내용을 텍스트로 읽지 못했습니다.");
+        return;
+      }
+
+      const rows = parseBackupCsvText(reader.result, transactions);
+      const successRows = rows.filter(
+        (row): row is ParsedBackupCsvSuccess => row.status === "parsed"
+      );
+      const addCount = successRows.filter((row) => row.action === "add").length;
+      const updateCount = successRows.filter((row) => row.action === "update").length;
+      const duplicateCount = successRows.filter((row) => row.action === "duplicate").length;
+      const failedCount = rows.filter((row) => row.status === "failed").length;
+
+      setParsedBackupCsvRows(rows);
+      setBackupCsvNotice(
+        `분석 완료: 추가 ${addCount}건, 업데이트 ${updateCount}건, 중복 ${duplicateCount}건, 실패 ${failedCount}건`
+      );
+    };
+
+    reader.onerror = () => {
+      setParsedBackupCsvRows([]);
+      setBackupCsvNotice("CSV 파일을 읽는 중 오류가 발생했습니다.");
+    };
+
+    reader.readAsText(file, "utf-8");
+    event.target.value = "";
+  }
+
+  function applyBackupCsvRowsToTransactions() {
+    if (actionableBackupCsvRows.length === 0) {
+      setBackupCsvNotice("반영할 백업 CSV 거래가 없습니다. 중복 또는 실패 항목만 있습니다.");
+      return;
+    }
+
+    const updateMap = new Map(
+      updatableBackupCsvRows.map((row) => [row.transaction.id, row.transaction])
+    );
+    const nextTransactions = addableBackupCsvRows.map((row) => row.transaction);
+
+    setTransactions((current) => [
+      ...nextTransactions,
+      ...current.map((transaction) => updateMap.get(transaction.id) ?? transaction)
+    ]);
+    setParsedBackupCsvRows((current) =>
+      current.map((row) =>
+        row.status === "parsed" && row.action !== "duplicate"
+          ? { ...row, action: "update" }
+          : row
+      )
+    );
+    setBackupCsvNotice(
+      `백업 CSV 반영 완료: 추가 ${nextTransactions.length}건, 업데이트 ${updateMap.size}건`
+    );
   }
 
   function resetStoredData() {
@@ -2142,6 +2476,160 @@ export default function Home() {
               </div>
             </Card>
           </section>
+
+          <Card>
+            <div className="mb-5 flex items-center gap-3">
+              <FileSpreadsheet className="h-5 w-5 text-blue-600" />
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">구글시트 CSV 백업</h2>
+                <p className="text-sm text-slate-500">
+                  CSV를 구글시트에 업로드해 백업하거나 수기 수정 후 다시 가져올 수 있습니다.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4">
+              <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[1fr_1fr]">
+                <div className="grid gap-3 rounded-md bg-white p-4">
+                  <div>
+                    <p className="font-bold text-slate-950">거래내역 CSV 내보내기</p>
+                    <p className="text-sm text-slate-500">
+                      현재 저장된 전체 거래 {transactions.length}건을 백업 파일로 저장합니다.
+                    </p>
+                  </div>
+                  <Button className="w-full sm:w-fit" onClick={exportTransactionsBackupCsv}>
+                    <Download className="h-4 w-4" />
+                    거래내역 CSV 내보내기
+                  </Button>
+                </div>
+
+                <div className="grid gap-3 rounded-md bg-white p-4">
+                  <Field label="구글시트에서 내려받은 CSV 가져오기">
+                    <Input
+                      type="file"
+                      accept=".csv,text/csv"
+                      onChange={handleBackupCsvFileChange}
+                    />
+                  </Field>
+                  <Button
+                    className="w-full sm:w-fit"
+                    disabled={actionableBackupCsvRows.length === 0}
+                    onClick={applyBackupCsvRowsToTransactions}
+                  >
+                    <FileUp className="h-4 w-4" />
+                    CSV 내용 반영
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="grid gap-1">
+                  <p className="text-sm text-slate-500">{backupCsvNotice}</p>
+                  {backupCsvFileName && (
+                    <p className="text-xs font-semibold text-slate-400">{backupCsvFileName}</p>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Badge tone="green">추가 {addableBackupCsvRows.length}건</Badge>
+                  <Badge tone="blue">업데이트 {updatableBackupCsvRows.length}건</Badge>
+                  <Badge tone="orange">
+                    중복{" "}
+                    {
+                      parsedBackupCsvSuccessRows.filter((row) => row.action === "duplicate")
+                        .length
+                    }
+                    건
+                  </Badge>
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <p className="text-sm font-bold text-slate-700">백업 CSV 미리보기</p>
+                  <Badge tone="blue">{parsedBackupCsvSuccessRows.length}건</Badge>
+                </div>
+                <div className="overflow-x-auto rounded-md border border-slate-200">
+                  <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-500">
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">상태</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">행</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">id</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">날짜</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">소유</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">유형</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">계좌</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">사용처</th>
+                        <th className="border-b border-slate-200 px-3 py-3 font-semibold">분류</th>
+                        <th className="border-b border-slate-200 px-3 py-3 text-right font-semibold">금액</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {parsedBackupCsvSuccessRows.length === 0 && (
+                        <tr>
+                          <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
+                            백업 CSV 분석 결과가 없습니다.
+                          </td>
+                        </tr>
+                      )}
+                      {parsedBackupCsvSuccessRows.map((row) => (
+                        <tr key={`${row.rowNumber}-${row.transaction.id}`} className="text-slate-700">
+                          <td className="border-b border-slate-100 px-3 py-3">
+                            <Badge tone={getBackupCsvActionTone(row.action)}>
+                              {getBackupCsvActionLabel(row.action)}
+                            </Badge>
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">{row.rowNumber}</td>
+                          <td className="border-b border-slate-100 px-3 py-3 font-mono text-xs">
+                            {row.transaction.id}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">
+                            {row.transaction.date}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">
+                            {row.transaction.owner}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">
+                            {row.transaction.type}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">
+                            {row.transaction.account}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3 font-semibold text-slate-900">
+                            {row.transaction.merchant}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3">
+                            {row.transaction.category}
+                          </td>
+                          <td className="border-b border-slate-100 px-3 py-3 text-right font-bold text-slate-950">
+                            {formatKRW(row.transaction.amount)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {failedBackupCsvRows.length > 0 && (
+                <div className="grid gap-2 rounded-md bg-slate-50 p-4">
+                  <p className="text-sm font-bold text-slate-700">실패한 행</p>
+                  {failedBackupCsvRows.map((row, index) => (
+                    <div
+                      key={`${row.rowNumber}-${row.reason}-${index}`}
+                      className="grid gap-1 rounded-md border border-slate-200 bg-white p-3 text-sm"
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge tone="slate">{row.rowNumber}행</Badge>
+                        <span className="font-semibold text-slate-700">{row.reason}</span>
+                      </div>
+                      <p className="break-words text-slate-500">{row.raw || "(빈 행)"}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
 
           <Card>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
