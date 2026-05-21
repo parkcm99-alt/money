@@ -131,27 +131,33 @@ const initialTransactions: Transaction[] = [
   }
 ];
 
-const accounts: Account[] = [
+const initialAccounts: Account[] = [
   {
+    id: "acct-001",
     owner: "남편",
     name: "급여통장",
     bank: "국민은행",
     balance: 4120000,
-    status: "API 예정"
+    status: "API 예정",
+    memo: "월급 입금 계좌"
   },
   {
+    id: "acct-002",
     owner: "아내",
     name: "생활통장",
     bank: "카카오뱅크",
     balance: 3100000,
-    status: "API 예정"
+    status: "API 예정",
+    memo: "생활비 보조 계좌"
   },
   {
+    id: "acct-003",
     owner: "공동",
     name: "공동생활비",
     bank: "토스뱅크",
     balance: 1200000,
-    status: "수기 입력"
+    status: "수기 입력",
+    memo: "부부 공용 생활비"
   }
 ];
 
@@ -166,7 +172,8 @@ const tabItems = [
 const SAMPLE_BASE_DATE = "2026-05-16";
 const STORAGE_KEYS = {
   transactions: "couple-finance-dashboard.transactions.v1",
-  periodMemo: "couple-finance-dashboard.periodMemo.v1"
+  periodMemo: "couple-finance-dashboard.periodMemo.v1",
+  accounts: "couple-finance-dashboard.accounts.v1"
 } as const;
 const DEFAULT_PERIOD_MEMO =
   "이번 기간은 주거비와 생활/마트 지출이 컸다. 다음 기간은 식비 예산을 먼저 확인하고 장보기 횟수를 줄여보기.";
@@ -201,6 +208,17 @@ type DraftTransaction = {
   amount: string;
   memo: string;
 };
+
+type AccountDraft = {
+  owner: Owner;
+  name: string;
+  bank: string;
+  balance: string;
+  status: string;
+  memo: string;
+};
+
+type AccountFormMode = "idle" | "add" | "edit";
 
 type ParsedNotificationSuccess = {
   line: string;
@@ -286,6 +304,15 @@ const emptyDraft: DraftTransaction = {
   merchant: "",
   category: "식비",
   amount: "",
+  memo: ""
+};
+
+const emptyAccountDraft: AccountDraft = {
+  owner: "공동",
+  name: "",
+  bank: "",
+  balance: "",
+  status: "수기 입력",
   memo: ""
 };
 
@@ -406,6 +433,25 @@ function isTransaction(value: unknown): value is Transaction {
   );
 }
 
+function isAccount(value: unknown): value is Account {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<Account>;
+
+  return (
+    typeof candidate.id === "string" &&
+    ["남편", "아내", "공동"].includes(candidate.owner ?? "") &&
+    typeof candidate.name === "string" &&
+    typeof candidate.bank === "string" &&
+    typeof candidate.balance === "number" &&
+    Number.isFinite(candidate.balance) &&
+    typeof candidate.status === "string" &&
+    (candidate.memo === undefined || typeof candidate.memo === "string")
+  );
+}
+
 function parseStoredTransactions(value: string | null) {
   if (!value) {
     return null;
@@ -414,6 +460,19 @@ function parseStoredTransactions(value: string | null) {
   try {
     const parsed: unknown = JSON.parse(value);
     return Array.isArray(parsed) && parsed.every(isTransaction) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseStoredAccounts(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every(isAccount) ? parsed : null;
   } catch {
     return null;
   }
@@ -1229,6 +1288,13 @@ export default function Home() {
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<DraftTransaction>(emptyDraft);
   const [editNotice, setEditNotice] = useState("수정할 거래를 선택해주세요.");
+  const [accounts, setAccounts] = useState<Account[]>(initialAccounts);
+  const [accountFormMode, setAccountFormMode] = useState<AccountFormMode>("idle");
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
+  const [accountDraft, setAccountDraft] = useState<AccountDraft>(emptyAccountDraft);
+  const [accountNotice, setAccountNotice] = useState(
+    "은행 API 연동 전까지 잔고를 수기로 관리합니다."
+  );
   const [periodMemo, setPeriodMemo] = useState(DEFAULT_PERIOD_MEMO);
   const [notificationText, setNotificationText] = useState("");
   const [parsedNotificationRows, setParsedNotificationRows] = useState<ParsedNotificationRow[]>([]);
@@ -1250,7 +1316,7 @@ export default function Home() {
   const [connectorNotice, setConnectorNotice] = useState("아직 외부 API는 연결하지 않았습니다.");
   const [storageNotice, setStorageNotice] = useState("브라우저 저장소와 동기화 준비 중입니다.");
 
-  const totalBalance = useMemo(() => getTotalBalance(accounts), []);
+  const totalBalance = useMemo(() => getTotalBalance(accounts), [accounts]);
   const filteredTransactions = useMemo(
     () =>
       transactions.filter(
@@ -1359,6 +1425,7 @@ export default function Home() {
       window.localStorage.getItem(STORAGE_KEYS.transactions)
     );
     const storedMemo = parseStoredMemo(window.localStorage.getItem(STORAGE_KEYS.periodMemo));
+    const storedAccounts = parseStoredAccounts(window.localStorage.getItem(STORAGE_KEYS.accounts));
 
     if (storedTransactions) {
       setTransactions(storedTransactions);
@@ -1368,8 +1435,12 @@ export default function Home() {
       setPeriodMemo(storedMemo);
     }
 
+    if (storedAccounts) {
+      setAccounts(storedAccounts);
+    }
+
     setStorageNotice(
-      storedTransactions || storedMemo !== null
+      storedTransactions || storedMemo !== null || storedAccounts
         ? "저장된 데이터를 불러왔습니다."
         : "샘플 데이터로 시작했습니다. 변경사항은 이 브라우저에 저장됩니다."
     );
@@ -1401,6 +1472,18 @@ export default function Home() {
   }, [periodMemo, storageReady]);
 
   useEffect(() => {
+    if (!storageReady || typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      window.localStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(accounts));
+    } catch {
+      setStorageNotice("계좌 정보를 브라우저 저장소에 저장하지 못했습니다.");
+    }
+  }, [accounts, storageReady]);
+
+  useEffect(() => {
     if (!resetStorageToken || typeof window === "undefined") {
       return;
     }
@@ -1408,6 +1491,7 @@ export default function Home() {
     try {
       window.localStorage.removeItem(STORAGE_KEYS.transactions);
       window.localStorage.removeItem(STORAGE_KEYS.periodMemo);
+      window.localStorage.removeItem(STORAGE_KEYS.accounts);
     } catch {
       setStorageNotice("브라우저 저장소 초기화 중 오류가 있었지만 화면 데이터는 복구했습니다.");
     }
@@ -1453,6 +1537,41 @@ export default function Home() {
     value: DraftTransaction[K]
   ) {
     setEditDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function updateAccountDraft<K extends keyof AccountDraft>(
+    key: K,
+    value: AccountDraft[K]
+  ) {
+    setAccountDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function startAddAccount() {
+    setAccountFormMode("add");
+    setEditingAccountId(null);
+    setAccountDraft(emptyAccountDraft);
+    setAccountNotice("새 계좌 정보를 입력해주세요.");
+  }
+
+  function startEditAccount(account: Account) {
+    setAccountFormMode("edit");
+    setEditingAccountId(account.id);
+    setAccountDraft({
+      balance: String(account.balance),
+      bank: account.bank,
+      memo: account.memo ?? "",
+      name: account.name,
+      owner: account.owner,
+      status: account.status
+    });
+    setAccountNotice(`${account.name} 계좌를 수정 중입니다.`);
+  }
+
+  function cancelAccountForm() {
+    setAccountFormMode("idle");
+    setEditingAccountId(null);
+    setAccountDraft(emptyAccountDraft);
+    setAccountNotice("계좌 수정을 취소했습니다.");
   }
 
   function addTransaction(event: FormEvent<HTMLFormElement>) {
@@ -1572,6 +1691,72 @@ export default function Home() {
     }
 
     setEditNotice(`${transaction.merchant} 거래를 삭제했습니다.`);
+  }
+
+  function saveAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const balance = Number(accountDraft.balance);
+
+    if (
+      !accountDraft.name.trim() ||
+      !accountDraft.bank.trim() ||
+      !accountDraft.status.trim() ||
+      !Number.isFinite(balance) ||
+      balance < 0
+    ) {
+      setAccountNotice("계좌명, 은행명, 상태, 잔고를 확인해주세요.");
+      return;
+    }
+
+    const nextAccount: Account = {
+      balance,
+      bank: accountDraft.bank.trim(),
+      id: editingAccountId ?? `acct-${Date.now()}`,
+      memo: accountDraft.memo.trim(),
+      name: accountDraft.name.trim(),
+      owner: accountDraft.owner,
+      status: accountDraft.status.trim()
+    };
+
+    if (accountFormMode === "edit" && editingAccountId) {
+      setAccounts((current) =>
+        current.map((account) => (account.id === editingAccountId ? nextAccount : account))
+      );
+      setAccountNotice(`${nextAccount.name} 계좌 정보를 저장했습니다.`);
+    } else {
+      setAccounts((current) => [nextAccount, ...current]);
+      setAccountNotice(`${nextAccount.name} 계좌를 추가했습니다.`);
+    }
+
+    setAccountFormMode("idle");
+    setEditingAccountId(null);
+    setAccountDraft(emptyAccountDraft);
+  }
+
+  function deleteAccount(account: Account) {
+    if (accounts.length <= 1) {
+      setAccountNotice("최소 1개 계좌는 남겨주세요.");
+      return;
+    }
+
+    const confirmed =
+      typeof window === "undefined" ||
+      window.confirm(`${account.name} ${formatKRW(account.balance)} 계좌를 삭제할까요?`);
+
+    if (!confirmed) {
+      return;
+    }
+
+    setAccounts((current) => current.filter((item) => item.id !== account.id));
+
+    if (editingAccountId === account.id) {
+      setAccountFormMode("idle");
+      setEditingAccountId(null);
+      setAccountDraft(emptyAccountDraft);
+    }
+
+    setAccountNotice(`${account.name} 계좌를 삭제했습니다.`);
   }
 
   function analyzeNotificationText() {
@@ -1793,10 +1978,15 @@ export default function Home() {
     }
 
     setTransactions(initialTransactions);
+    setAccounts(initialAccounts);
     setPeriodMemo(DEFAULT_PERIOD_MEMO);
     setEditingTransactionId(null);
     setEditDraft(emptyDraft);
     setEditNotice("샘플 데이터로 초기화했습니다.");
+    setAccountFormMode("idle");
+    setEditingAccountId(null);
+    setAccountDraft(emptyAccountDraft);
+    setAccountNotice("샘플 계좌 정보로 초기화했습니다.");
     setFormNotice("샘플 데이터로 초기화했습니다.");
     setStorageNotice("데이터를 초기화하고 샘플 데이터로 복구했습니다.");
     setResetStorageToken((current) => current + 1);
@@ -2658,7 +2848,7 @@ export default function Home() {
         <div className="grid gap-6">
           <section className="grid gap-4 md:grid-cols-3">
             {accounts.map((account) => (
-              <Card key={`${account.owner}-${account.name}`}>
+              <Card key={account.id}>
                 <div className="mb-4 flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-500">{account.owner}</p>
@@ -2670,12 +2860,126 @@ export default function Home() {
                 <p className="mb-3 text-2xl font-bold text-slate-950">
                   {formatKRW(account.balance)}
                 </p>
-                <Badge tone={account.status === "수기 입력" ? "green" : "orange"}>
-                  {account.status}
-                </Badge>
+                <div className="grid gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge tone={account.status === "수기 입력" ? "green" : "orange"}>
+                      {account.status}
+                    </Badge>
+                    {account.memo && (
+                      <span className="text-xs font-semibold text-slate-400">{account.memo}</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      className="min-h-8 px-3 py-1 text-xs"
+                      variant="secondary"
+                      onClick={() => startEditAccount(account)}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      수정
+                    </Button>
+                    <Button
+                      className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                      variant="ghost"
+                      onClick={() => deleteAccount(account)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      삭제
+                    </Button>
+                  </div>
+                </div>
               </Card>
             ))}
           </section>
+
+          <Card>
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-center gap-3">
+                <Landmark className="h-5 w-5 text-blue-600" />
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">계좌 관리</h2>
+                  <p className="text-sm text-slate-500">
+                    은행 API 연동 전까지 계좌명, 은행명, 잔고와 상태를 수기로 관리합니다.
+                  </p>
+                </div>
+              </div>
+              <Button onClick={startAddAccount}>
+                <Plus className="h-4 w-4" />
+                계좌 추가
+              </Button>
+            </div>
+
+            {accountFormMode === "idle" && (
+              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+                계좌 카드의 수정 버튼을 누르거나 새 계좌를 추가해주세요.
+              </div>
+            )}
+
+            {accountFormMode !== "idle" && (
+              <form className="grid gap-4" onSubmit={saveAccount}>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <Field label="사용자">
+                    <SelectField
+                      value={accountDraft.owner}
+                      onChange={(value) => updateAccountDraft("owner", value)}
+                      options={ownerOptions}
+                    />
+                  </Field>
+                  <Field label="계좌명">
+                    <Input
+                      value={accountDraft.name}
+                      onChange={(event) => updateAccountDraft("name", event.target.value)}
+                      placeholder="예: 급여통장"
+                    />
+                  </Field>
+                  <Field label="은행명">
+                    <Input
+                      value={accountDraft.bank}
+                      onChange={(event) => updateAccountDraft("bank", event.target.value)}
+                      placeholder="예: 국민은행"
+                    />
+                  </Field>
+                  <Field label="잔고">
+                    <Input
+                      type="number"
+                      min="0"
+                      inputMode="numeric"
+                      value={accountDraft.balance}
+                      onChange={(event) => updateAccountDraft("balance", event.target.value)}
+                      placeholder="0"
+                    />
+                  </Field>
+                  <Field label="상태">
+                    <Input
+                      value={accountDraft.status}
+                      onChange={(event) => updateAccountDraft("status", event.target.value)}
+                      placeholder="수기 입력"
+                    />
+                  </Field>
+                  <Field label="메모">
+                    <Input
+                      value={accountDraft.memo}
+                      onChange={(event) => updateAccountDraft("memo", event.target.value)}
+                      placeholder="예: 비상금 계좌"
+                    />
+                  </Field>
+                </div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-slate-500">{accountNotice}</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button variant="secondary" onClick={cancelAccountForm}>
+                      <X className="h-4 w-4" />
+                      취소
+                    </Button>
+                    <Button type="submit">
+                      <Save className="h-4 w-4" />
+                      저장
+                    </Button>
+                  </div>
+                </div>
+              </form>
+            )}
+          </Card>
 
           <section className="grid gap-4 lg:grid-cols-2">
             <Card>

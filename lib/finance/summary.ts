@@ -14,11 +14,13 @@ export type Transaction = {
 };
 
 export type Account = {
+  id: string;
   owner: Owner;
   name: string;
   bank: string;
   balance: number;
   status: string;
+  memo?: string;
 };
 
 export type NamedAmount = {
