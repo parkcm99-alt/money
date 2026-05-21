@@ -240,7 +240,7 @@ type ParsedCsvIssue = {
 
 type ParsedCsvRow = ParsedCsvSuccess | ParsedCsvIssue;
 
-type BackupCsvAction = "add" | "update" | "duplicate";
+type BackupCsvAction = "add" | "duplicate";
 
 type ParsedBackupCsvSuccess = {
   rowNumber: number;
@@ -865,16 +865,17 @@ function parseBackupCsvText(text: string, transactions: Transaction[]): ParsedBa
     ];
   }
 
-  const existingById = new Map(transactions.map((transaction) => [transaction.id, transaction]));
+  const existingIds = new Set(transactions.map((transaction) => transaction.id));
   const existingKeys = new Set(transactions.map((transaction) => getTransactionKey(transaction)));
   const batchIds = new Set<string>();
   const batchKeys = new Set<string>();
+  const generatedIdSeed = Date.now();
 
   return rows.map((rawRow, index) => {
     const row = alignCsvRow(rawRow, headers.length, columnIndexes.amount);
     const rowNumber = index + 2;
     const raw = rawRow.join(", ");
-    const id = readCsvCell(row, columnIndexes.id);
+    const originalId = readCsvCell(row, columnIndexes.id);
     const date = normalizeCsvDate(readCsvCell(row, columnIndexes.date));
     const ownerValue = readCsvCell(row, columnIndexes.owner);
     const typeValue = readCsvCell(row, columnIndexes.type);
@@ -883,26 +884,6 @@ function parseBackupCsvText(text: string, transactions: Transaction[]): ParsedBa
     const category = readCsvCell(row, columnIndexes.category);
     const amount = normalizeCsvAmount(readCsvCell(row, columnIndexes.amount));
     const memo = readCsvCell(row, columnIndexes.memo);
-
-    if (!id) {
-      return {
-        raw,
-        reason: "id를 찾을 수 없음",
-        rowNumber,
-        status: "failed"
-      };
-    }
-
-    if (batchIds.has(id)) {
-      return {
-        raw,
-        reason: "같은 id가 CSV 안에 중복됨",
-        rowNumber,
-        status: "failed"
-      };
-    }
-
-    batchIds.add(id);
 
     if (!date) {
       return {
@@ -934,7 +915,7 @@ function parseBackupCsvText(text: string, transactions: Transaction[]): ParsedBa
     if (!account || !merchant || !category) {
       return {
         raw,
-        reason: "계좌, 사용처, 카테고리는 비워둘 수 없음",
+        reason: "필수값 누락: 계좌, 사용처, 카테고리는 비워둘 수 없음",
         rowNumber,
         status: "failed"
       };
@@ -949,23 +930,15 @@ function parseBackupCsvText(text: string, transactions: Transaction[]): ParsedBa
       };
     }
 
-    const transaction: Transaction = {
-      account,
-      amount,
-      category,
-      date,
-      id,
-      memo,
-      merchant,
-      owner: ownerValue as Owner,
-      type: typeValue as TransactionType
-    };
-    const key = getTransactionKey(transaction);
-    const action: BackupCsvAction = existingById.has(id)
-      ? "update"
-      : existingKeys.has(key) || batchKeys.has(key)
-        ? "duplicate"
-        : "add";
+    const key = getTransactionKey({ account, amount, date, merchant });
+    const action: BackupCsvAction =
+      existingKeys.has(key) || batchKeys.has(key) ? "duplicate" : "add";
+    const id =
+      originalId && (action === "duplicate" || (!existingIds.has(originalId) && !batchIds.has(originalId)))
+        ? originalId
+        : `tx-backup-${generatedIdSeed}-${index}`;
+
+    batchIds.add(id);
 
     batchKeys.add(key);
 
@@ -973,7 +946,17 @@ function parseBackupCsvText(text: string, transactions: Transaction[]): ParsedBa
       action,
       rowNumber,
       status: "parsed",
-      transaction
+      transaction: {
+        account,
+        amount,
+        category,
+        date,
+        id,
+        memo,
+        merchant,
+        owner: ownerValue as Owner,
+        type: typeValue as TransactionType
+      }
     };
   });
 }
@@ -983,20 +966,12 @@ function getBackupCsvActionLabel(action: BackupCsvAction) {
     return "추가 가능";
   }
 
-  if (action === "update") {
-    return "업데이트";
-  }
-
   return "중복";
 }
 
 function getBackupCsvActionTone(action: BackupCsvAction) {
   if (action === "add") {
     return "green";
-  }
-
-  if (action === "update") {
-    return "blue";
   }
 
   return "orange";
@@ -1322,12 +1297,6 @@ export default function Home() {
     (row): row is ParsedBackupCsvSuccess => row.status === "parsed"
   );
   const addableBackupCsvRows = parsedBackupCsvSuccessRows.filter((row) => row.action === "add");
-  const updatableBackupCsvRows = parsedBackupCsvSuccessRows.filter(
-    (row) => row.action === "update"
-  );
-  const actionableBackupCsvRows = parsedBackupCsvSuccessRows.filter(
-    (row) => row.action !== "duplicate"
-  );
   const failedBackupCsvRows = parsedBackupCsvRows.filter(
     (row): row is ParsedBackupCsvIssue => row.status === "failed"
   );
@@ -1615,13 +1584,12 @@ export default function Home() {
         (row): row is ParsedBackupCsvSuccess => row.status === "parsed"
       );
       const addCount = successRows.filter((row) => row.action === "add").length;
-      const updateCount = successRows.filter((row) => row.action === "update").length;
       const duplicateCount = successRows.filter((row) => row.action === "duplicate").length;
       const failedCount = rows.filter((row) => row.status === "failed").length;
 
       setParsedBackupCsvRows(rows);
       setBackupCsvNotice(
-        `분석 완료: 추가 ${addCount}건, 업데이트 ${updateCount}건, 중복 ${duplicateCount}건, 실패 ${failedCount}건`
+        `분석 완료: 추가 가능 ${addCount}건, 중복 ${duplicateCount}건, 실패 ${failedCount}건`
       );
     };
 
@@ -1635,30 +1603,20 @@ export default function Home() {
   }
 
   function applyBackupCsvRowsToTransactions() {
-    if (actionableBackupCsvRows.length === 0) {
-      setBackupCsvNotice("반영할 백업 CSV 거래가 없습니다. 중복 또는 실패 항목만 있습니다.");
+    if (addableBackupCsvRows.length === 0) {
+      setBackupCsvNotice("추가할 백업 CSV 거래가 없습니다. 중복 또는 실패 항목만 있습니다.");
       return;
     }
 
-    const updateMap = new Map(
-      updatableBackupCsvRows.map((row) => [row.transaction.id, row.transaction])
-    );
     const nextTransactions = addableBackupCsvRows.map((row) => row.transaction);
 
-    setTransactions((current) => [
-      ...nextTransactions,
-      ...current.map((transaction) => updateMap.get(transaction.id) ?? transaction)
-    ]);
+    setTransactions((current) => [...nextTransactions, ...current]);
     setParsedBackupCsvRows((current) =>
       current.map((row) =>
-        row.status === "parsed" && row.action !== "duplicate"
-          ? { ...row, action: "update" }
-          : row
+        row.status === "parsed" && row.action === "add" ? { ...row, action: "duplicate" } : row
       )
     );
-    setBackupCsvNotice(
-      `백업 CSV 반영 완료: 추가 ${nextTransactions.length}건, 업데이트 ${updateMap.size}건`
-    );
+    setBackupCsvNotice(`백업 CSV 거래 ${nextTransactions.length}건을 거래내역에 추가했습니다.`);
   }
 
   function resetStoredData() {
@@ -2481,9 +2439,12 @@ export default function Home() {
             <div className="mb-5 flex items-center gap-3">
               <FileSpreadsheet className="h-5 w-5 text-blue-600" />
               <div>
-                <h2 className="text-lg font-bold text-slate-950">구글시트 CSV 백업</h2>
+                <h2 className="text-lg font-bold text-slate-950">구글시트 CSV 백업/복구</h2>
                 <p className="text-sm text-slate-500">
                   CSV를 구글시트에 업로드해 백업하거나 수기 수정 후 다시 가져올 수 있습니다.
+                </p>
+                <p className="text-sm text-slate-500">
+                  구글시트 API 직접 연동은 다음 단계에서 진행합니다.
                 </p>
               </div>
             </div>
@@ -2492,19 +2453,19 @@ export default function Home() {
               <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[1fr_1fr]">
                 <div className="grid gap-3 rounded-md bg-white p-4">
                   <div>
-                    <p className="font-bold text-slate-950">거래내역 CSV 내보내기</p>
+                    <p className="font-bold text-slate-950">CSV 백업 내보내기</p>
                     <p className="text-sm text-slate-500">
                       현재 저장된 전체 거래 {transactions.length}건을 백업 파일로 저장합니다.
                     </p>
                   </div>
                   <Button className="w-full sm:w-fit" onClick={exportTransactionsBackupCsv}>
                     <Download className="h-4 w-4" />
-                    거래내역 CSV 내보내기
+                    CSV 백업 내보내기
                   </Button>
                 </div>
 
                 <div className="grid gap-3 rounded-md bg-white p-4">
-                  <Field label="구글시트에서 내려받은 CSV 가져오기">
+                  <Field label="백업 CSV 다시 가져오기">
                     <Input
                       type="file"
                       accept=".csv,text/csv"
@@ -2513,11 +2474,11 @@ export default function Home() {
                   </Field>
                   <Button
                     className="w-full sm:w-fit"
-                    disabled={actionableBackupCsvRows.length === 0}
+                    disabled={addableBackupCsvRows.length === 0}
                     onClick={applyBackupCsvRowsToTransactions}
                   >
                     <FileUp className="h-4 w-4" />
-                    CSV 내용 반영
+                    백업 CSV 거래내역에 추가
                   </Button>
                 </div>
               </div>
@@ -2531,7 +2492,6 @@ export default function Home() {
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <Badge tone="green">추가 {addableBackupCsvRows.length}건</Badge>
-                  <Badge tone="blue">업데이트 {updatableBackupCsvRows.length}건</Badge>
                   <Badge tone="orange">
                     중복{" "}
                     {
