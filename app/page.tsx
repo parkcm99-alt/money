@@ -18,6 +18,9 @@ import {
   Bell,
   CalendarDays,
   CheckCircle2,
+  Cloud,
+  CloudDownload,
+  CloudUpload,
   CreditCard,
   Database,
   Download,
@@ -220,7 +223,8 @@ const STORAGE_KEYS = {
   transactions: "couple-finance-dashboard.transactions.v1",
   periodMemo: "couple-finance-dashboard.periodMemo.v1",
   accounts: "couple-finance-dashboard.accounts.v1",
-  budgets: "couple-finance-dashboard.budgets.v1"
+  budgets: "couple-finance-dashboard.budgets.v1",
+  syncPin: "couple-finance-dashboard.syncPin.v1"
 } as const;
 const DEFAULT_PERIOD_MEMO =
   "이번 기간은 주거비와 생활/마트 지출이 컸다. 다음 기간은 식비 예산을 먼저 확인하고 장보기 횟수를 줄여보기.";
@@ -243,6 +247,20 @@ type PeriodFilter = {
 type TelegramSendResponse = {
   ok: boolean;
   message: string;
+};
+
+type CloudSyncSnapshotData = {
+  accounts: Account[];
+  budgets: Budget[];
+  periodMemo: string;
+  transactions: Transaction[];
+};
+
+type CloudSyncResponse = {
+  data?: unknown;
+  message?: string;
+  ok: boolean;
+  updatedAt?: string;
 };
 
 type DraftTransaction = {
@@ -577,6 +595,24 @@ function parseStoredBudgets(value: string | null) {
   } catch {
     return null;
   }
+}
+
+function isCloudSyncSnapshotData(value: unknown): value is CloudSyncSnapshotData {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<CloudSyncSnapshotData>;
+
+  return (
+    Array.isArray(candidate.transactions) &&
+    candidate.transactions.every(isTransaction) &&
+    Array.isArray(candidate.accounts) &&
+    candidate.accounts.every(isAccount) &&
+    Array.isArray(candidate.budgets) &&
+    candidate.budgets.every(isBudget) &&
+    typeof candidate.periodMemo === "string"
+  );
 }
 
 function parseStoredMemo(value: string | null) {
@@ -1462,6 +1498,11 @@ export default function Home() {
     "텔레그램 발송은 환경변수 설정 후 사용할 수 있습니다."
   );
   const [telegramSending, setTelegramSending] = useState(false);
+  const [syncPin, setSyncPin] = useState("");
+  const [cloudNotice, setCloudNotice] = useState(
+    "Supabase Free 공동 저장은 환경변수 설정 후 사용할 수 있습니다."
+  );
+  const [cloudSyncing, setCloudSyncing] = useState(false);
   const [formNotice, setFormNotice] = useState("샘플 데이터로 시작했습니다.");
   const [connectorNotice, setConnectorNotice] = useState("아직 외부 API는 연결하지 않았습니다.");
   const [storageNotice, setStorageNotice] = useState("브라우저 저장소와 동기화 준비 중입니다.");
@@ -1630,6 +1671,7 @@ export default function Home() {
     const storedMemo = parseStoredMemo(window.localStorage.getItem(STORAGE_KEYS.periodMemo));
     const storedAccounts = parseStoredAccounts(window.localStorage.getItem(STORAGE_KEYS.accounts));
     const storedBudgets = parseStoredBudgets(window.localStorage.getItem(STORAGE_KEYS.budgets));
+    const storedSyncPin = window.localStorage.getItem(STORAGE_KEYS.syncPin);
 
     if (storedTransactions) {
       setTransactions(storedTransactions);
@@ -1645,6 +1687,10 @@ export default function Home() {
 
     if (storedBudgets) {
       setBudgets(storedBudgets);
+    }
+
+    if (storedSyncPin) {
+      setSyncPin(storedSyncPin);
     }
 
     setStorageNotice(
@@ -1704,6 +1750,22 @@ export default function Home() {
   }, [budgets, storageReady]);
 
   useEffect(() => {
+    if (!storageReady || typeof window === "undefined") {
+      return;
+    }
+
+    try {
+      if (syncPin.trim()) {
+        window.localStorage.setItem(STORAGE_KEYS.syncPin, syncPin);
+      } else {
+        window.localStorage.removeItem(STORAGE_KEYS.syncPin);
+      }
+    } catch {
+      setStorageNotice("동기화 PIN을 브라우저 저장소에 저장하지 못했습니다.");
+    }
+  }, [storageReady, syncPin]);
+
+  useEffect(() => {
     if (!resetStorageToken || typeof window === "undefined") {
       return;
     }
@@ -1713,6 +1775,7 @@ export default function Home() {
       window.localStorage.removeItem(STORAGE_KEYS.periodMemo);
       window.localStorage.removeItem(STORAGE_KEYS.accounts);
       window.localStorage.removeItem(STORAGE_KEYS.budgets);
+      window.localStorage.removeItem(STORAGE_KEYS.syncPin);
     } catch {
       setStorageNotice("브라우저 저장소 초기화 중 오류가 있었지만 화면 데이터는 복구했습니다.");
     }
@@ -2282,6 +2345,113 @@ export default function Home() {
     }
   }
 
+  async function saveCloudSnapshot() {
+    const pin = syncPin.trim();
+
+    if (!pin) {
+      setCloudNotice("동기화 PIN을 입력해주세요.");
+      return;
+    }
+
+    setCloudSyncing(true);
+    setCloudNotice("클라우드에 현재 데이터를 저장하는 중입니다.");
+
+    try {
+      const response = await fetch("/api/cloud-sync", {
+        body: JSON.stringify({
+          data: {
+            accounts,
+            budgets,
+            periodMemo,
+            transactions
+          },
+          pin
+        }),
+        headers: {
+          "Content-Type": "application/json",
+          "x-sync-pin": pin
+        },
+        method: "POST"
+      });
+      const result = (await response.json()) as CloudSyncResponse;
+
+      if (!result.ok) {
+        setCloudNotice(result.message || "클라우드 저장에 실패했습니다.");
+        return;
+      }
+
+      setCloudNotice(
+        result.updatedAt
+          ? `클라우드에 저장했습니다. (${result.updatedAt})`
+          : "클라우드에 저장했습니다."
+      );
+    } catch {
+      setCloudNotice("클라우드 저장 요청 중 오류가 발생했습니다.");
+    } finally {
+      setCloudSyncing(false);
+    }
+  }
+
+  async function loadCloudSnapshot() {
+    const pin = syncPin.trim();
+
+    if (!pin) {
+      setCloudNotice("동기화 PIN을 입력해주세요.");
+      return;
+    }
+
+    setCloudSyncing(true);
+    setCloudNotice("클라우드에서 데이터를 불러오는 중입니다.");
+
+    try {
+      const params = new URLSearchParams({ pin });
+      const response = await fetch(`/api/cloud-sync?${params.toString()}`, {
+        headers: {
+          "x-sync-pin": pin
+        },
+        method: "GET"
+      });
+      const result = (await response.json()) as CloudSyncResponse;
+
+      if (!result.ok) {
+        setCloudNotice(result.message || "클라우드 데이터를 불러오지 못했습니다.");
+        return;
+      }
+
+      if (result.data === null) {
+        setCloudNotice("클라우드에 저장된 데이터가 아직 없습니다.");
+        return;
+      }
+
+      if (!isCloudSyncSnapshotData(result.data)) {
+        setCloudNotice("클라우드 데이터 구조가 현재 앱과 맞지 않습니다.");
+        return;
+      }
+
+      setTransactions(result.data.transactions);
+      setAccounts(result.data.accounts);
+      setBudgets(result.data.budgets);
+      setPeriodMemo(result.data.periodMemo);
+      setEditingTransactionId(null);
+      setEditDraft(emptyDraft);
+      setAccountFormMode("idle");
+      setEditingAccountId(null);
+      setAccountDraft(emptyAccountDraft);
+      setBudgetFormMode("idle");
+      setEditingBudgetId(null);
+      setBudgetDraft(emptyBudgetDraft);
+      setCloudNotice(
+        result.updatedAt
+          ? `클라우드 데이터를 불러왔습니다. (${result.updatedAt})`
+          : "클라우드 데이터를 불러왔습니다."
+      );
+    } catch {
+      setCloudNotice("클라우드 불러오기 요청 중 오류가 발생했습니다.");
+    } finally {
+      setCloudSyncing(false);
+    }
+  }
+
   function resetStoredData() {
     if (typeof window !== "undefined") {
       try {
@@ -2309,6 +2479,8 @@ export default function Home() {
     setEditingBudgetId(null);
     setBudgetDraft(emptyBudgetDraft);
     setBudgetNotice("샘플 예산 정보로 초기화했습니다.");
+    setSyncPin("");
+    setCloudNotice("Supabase Free 공동 저장은 환경변수 설정 후 사용할 수 있습니다.");
     setFormNotice("샘플 데이터로 초기화했습니다.");
     setStorageNotice("데이터를 초기화하고 샘플 데이터로 복구했습니다.");
     setResetStorageToken((current) => current + 1);
@@ -3459,6 +3631,53 @@ export default function Home() {
                 </div>
               </form>
             )}
+          </Card>
+
+          <Card>
+            <div className="mb-5 flex items-center gap-3">
+              <Cloud className="h-5 w-5 text-blue-600" />
+              <div>
+                <h2 className="text-lg font-bold text-slate-950">클라우드 공동 저장</h2>
+                <p className="text-sm text-slate-500">
+                  이 기능은 부부가 여러 기기에서 같은 데이터를 보기 위한 공동 저장 기능입니다.
+                </p>
+                <p className="text-sm text-slate-500">
+                  초기 버전은 로그인 대신 동기화 PIN으로 보호합니다.
+                </p>
+                <p className="text-sm text-slate-500">
+                  Supabase Free 기준으로 시작하며, localStorage 백업은 계속 유지됩니다.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-end">
+              <Field label="동기화 PIN">
+                <Input
+                  type="password"
+                  value={syncPin}
+                  onChange={(event) => setSyncPin(event.target.value)}
+                  placeholder="APP_SYNC_PIN"
+                />
+              </Field>
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={cloudSyncing} onClick={saveCloudSnapshot}>
+                  <CloudUpload className="h-4 w-4" />
+                  {cloudSyncing ? "처리 중" : "클라우드에 저장"}
+                </Button>
+                <Button disabled={cloudSyncing} variant="secondary" onClick={loadCloudSnapshot}>
+                  <CloudDownload className="h-4 w-4" />
+                  클라우드에서 불러오기
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4 grid gap-3 rounded-md bg-slate-50 p-4 text-sm text-slate-600">
+              <p>{cloudNotice}</p>
+              <p>
+                저장 범위: 거래 {transactions.length}건, 계좌 {accounts.length}개, 예산{" "}
+                {budgets.length}개, 기간 메모
+              </p>
+            </div>
           </Card>
 
           <section className="grid gap-4 lg:grid-cols-2">
