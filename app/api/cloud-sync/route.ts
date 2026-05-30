@@ -95,17 +95,22 @@ export async function GET(request: Request) {
   if (error) {
     return NextResponse.json({
       ok: false,
-      message: error.message || "클라우드 데이터를 불러오지 못했습니다."
+      message: error.message || "Supabase에서 클라우드 데이터를 불러오지 못했습니다."
     });
   }
 
   if (!data) {
-    return NextResponse.json({ ok: true, data: null });
+    return NextResponse.json({
+      ok: true,
+      data: null,
+      message: "저장된 클라우드 데이터가 없습니다."
+    });
   }
 
   return NextResponse.json({
     ok: true,
     data: data.data,
+    message: "클라우드 데이터를 불러왔습니다.",
     updatedAt: data.updated_at
   });
 }
@@ -152,12 +157,13 @@ export async function POST(request: Request) {
   if (error) {
     return NextResponse.json({
       ok: false,
-      message: error.message || "클라우드 저장에 실패했습니다."
+      message: error.message || "Supabase 저장에 실패했습니다."
     });
   }
 
   return NextResponse.json({
     ok: true,
+    message: "클라우드에 저장했습니다.",
     updatedAt
   });
 }
