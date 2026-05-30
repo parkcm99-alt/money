@@ -1258,7 +1258,7 @@ function Card({
   return (
     <section
       className={cn(
-        "rounded-lg border border-slate-200/80 bg-white/90 p-5 shadow-soft backdrop-blur",
+        "rounded-lg border border-slate-200/80 bg-white/90 p-4 shadow-soft backdrop-blur sm:p-5",
         className
       )}
     >
@@ -1280,7 +1280,7 @@ function Button({
     <button
       type={type}
       className={cn(
-        "inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-60",
+        "inline-flex min-h-11 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 focus:ring-blue-200 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-10",
         variant === "primary" && "bg-blue-600 text-white shadow-sm hover:bg-blue-700",
         variant === "secondary" &&
           "border border-slate-200 bg-white text-slate-800 hover:bg-slate-50",
@@ -1321,7 +1321,7 @@ function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={cn(
-        "min-h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100",
+        "min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:min-h-10",
         props.className
       )}
     />
@@ -1333,7 +1333,7 @@ function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
     <textarea
       {...props}
       className={cn(
-        "min-h-24 w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100",
+        "min-h-32 w-full resize-none rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:min-h-24",
         props.className
       )}
     />
@@ -1348,21 +1348,23 @@ function Tabs({
   onChange: (tab: TabId) => void;
 }) {
   return (
-    <div className="grid grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
-      {tabItems.map((tab) => (
-        <button
-          key={tab.id}
-          type="button"
-          onClick={() => onChange(tab.id)}
-          className={cn(
-            "min-h-10 rounded-md px-3 text-sm font-semibold text-slate-600 transition",
-            active === tab.id && "bg-blue-600 text-white shadow-sm",
-            active !== tab.id && "hover:bg-slate-50"
-          )}
-        >
-          {tab.label}
-        </button>
-      ))}
+    <div className="-mx-1 overflow-x-auto px-1">
+      <div className="grid min-w-max grid-cols-3 gap-1 rounded-lg border border-slate-200 bg-white p-1 shadow-sm sm:min-w-0">
+        {tabItems.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onChange(tab.id)}
+            className={cn(
+              "min-h-11 whitespace-nowrap rounded-md px-4 text-sm font-semibold text-slate-600 transition sm:min-h-10 sm:px-3",
+              active === tab.id && "bg-blue-600 text-white shadow-sm",
+              active !== tab.id && "hover:bg-slate-50"
+            )}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1395,7 +1397,7 @@ function SelectField<T extends string>({
     <select
       value={value}
       onChange={(event) => onChange(event.target.value as T)}
-      className="min-h-10 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+      className="min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:min-h-10"
     >
       {options.map((option) => (
         <option key={option} value={option}>
@@ -1420,11 +1422,11 @@ function MetricCard({
   tone: "blue" | "green" | "orange" | "slate";
 }) {
   return (
-    <Card className="grid min-h-36 gap-4">
+    <Card className="grid min-h-32 gap-4 sm:min-h-36">
       <div className="flex items-start justify-between gap-3">
-        <div className="grid gap-1">
+        <div className="grid min-w-0 gap-1">
           <p className="text-sm font-semibold text-slate-500">{label}</p>
-          <p className="text-2xl font-bold tracking-normal text-slate-950 sm:text-3xl">
+          <p className="break-words text-[1.35rem] font-bold leading-tight tracking-normal text-slate-950 sm:text-3xl">
             {value}
           </p>
         </div>
@@ -1454,7 +1456,7 @@ function ChartBox({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
-  const height = 288;
+  const height = width > 0 && width < 420 ? 240 : 288;
 
   useEffect(() => {
     if (!containerRef.current || typeof ResizeObserver === "undefined") {
@@ -1470,8 +1472,103 @@ function ChartBox({
   }, []);
 
   return (
-    <div ref={containerRef} className="h-72 min-w-0">
+    <div ref={containerRef} className="h-60 min-w-0 sm:h-72">
       {ready && width > 0 ? children({ height, width }) : <ChartFallback message={fallbackMessage} />}
+    </div>
+  );
+}
+
+function EmptyState({ message }: { message: string }) {
+  return (
+    <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
+      {message}
+    </div>
+  );
+}
+
+function DetailLine({
+  label,
+  value
+}: {
+  label: string;
+  value: React.ReactNode;
+}) {
+  return (
+    <div className="grid gap-1">
+      <span className="text-xs font-semibold text-slate-400">{label}</span>
+      <span className="break-words text-sm font-semibold text-slate-700">{value}</span>
+    </div>
+  );
+}
+
+function TransactionMobileCard({
+  onDelete,
+  onEdit,
+  onMemoChange,
+  transaction
+}: {
+  onDelete: (transaction: Transaction) => void;
+  onEdit: (transaction: Transaction) => void;
+  onMemoChange?: (value: string) => void;
+  transaction: Transaction;
+}) {
+  return (
+    <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            tone={
+              transaction.owner === "공동"
+                ? "green"
+                : transaction.owner === "남편"
+                  ? "blue"
+                  : "orange"
+            }
+          >
+            {transaction.owner}
+          </Badge>
+          <Badge tone="slate">{transaction.type}</Badge>
+          <span className="text-xs font-semibold text-slate-400">{transaction.date}</span>
+        </div>
+        <strong className="text-lg leading-tight text-slate-950">
+          {formatKRW(transaction.amount)}
+        </strong>
+      </div>
+
+      <div>
+        <p className="break-words text-base font-bold text-slate-950">{transaction.merchant}</p>
+        <p className="mt-1 text-sm text-slate-500">{transaction.category}</p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 rounded-md bg-slate-50 p-3">
+        <DetailLine label="계좌/카드명" value={transaction.account} />
+        <DetailLine label="사용처" value={transaction.merchant} />
+        <DetailLine label="카테고리" value={transaction.category} />
+        <DetailLine label="메모" value={transaction.memo || "메모 없음"} />
+      </div>
+
+      {onMemoChange && (
+        <Textarea
+          className="min-h-24"
+          value={transaction.memo}
+          onChange={(event) => onMemoChange(event.target.value)}
+        />
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="secondary" onClick={() => onEdit(transaction)}>
+          <Pencil className="h-4 w-4" />
+          수정
+        </Button>
+        <Button
+          className="text-red-600 hover:bg-red-50"
+          variant="ghost"
+          onClick={() => onDelete(transaction)}
+        >
+          <Trash2 className="h-4 w-4" />
+          삭제
+        </Button>
+      </div>
     </div>
   );
 }
@@ -2590,12 +2687,12 @@ export default function Home() {
   }
 
   return (
-    <main className="mx-auto grid w-full max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:px-8">
+    <main className="mx-auto grid w-full max-w-7xl gap-5 px-3 py-5 sm:gap-6 sm:px-6 sm:py-6 lg:px-8">
       <header className="grid gap-4 md:grid-cols-[1fr_auto] md:items-end">
         <div className="grid gap-3">
           <Badge tone="blue">부부 금융 대시보드 v0.1</Badge>
           <div className="grid gap-2">
-            <h1 className="text-3xl font-bold tracking-normal text-slate-950 sm:text-4xl">
+            <h1 className="text-2xl font-bold tracking-normal text-slate-950 sm:text-4xl">
               선택 기간 돈 흐름
             </h1>
             <p className="max-w-2xl text-sm leading-6 text-slate-600 sm:text-base">
@@ -2684,7 +2781,7 @@ export default function Home() {
 
       {activeTab === "overview" && (
         <div className="grid gap-6">
-          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <section className="grid gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
             <MetricCard
               icon={<Wallet className="h-5 w-5" />}
               label="총 잔고"
@@ -2789,14 +2886,21 @@ export default function Home() {
                   <AreaChart
                     data={weeklyFlowData}
                     height={height}
-                    margin={{ left: 4, right: 12 }}
+                    margin={{ bottom: 4, left: 0, right: 8 }}
                     width={width}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="date" tick={{ fontSize: 12 }} stroke="#64748b" />
-                    <YAxis
-                      tick={{ fontSize: 12 }}
+                    <XAxis
+                      dataKey="date"
+                      interval="preserveStartEnd"
+                      tick={{ fontSize: 11 }}
+                      tickMargin={8}
                       stroke="#64748b"
+                    />
+                    <YAxis
+                      tick={{ fontSize: 11 }}
+                      stroke="#64748b"
+                      width={42}
                       tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`}
                     />
                     <Tooltip
@@ -2889,14 +2993,15 @@ export default function Home() {
                   <BarChart
                     data={ownerData}
                     height={height}
-                    margin={{ left: 4, right: 12 }}
+                    margin={{ bottom: 4, left: 0, right: 8 }}
                     width={width}
                   >
                     <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                    <XAxis dataKey="name" tick={{ fontSize: 12 }} stroke="#64748b" />
+                    <XAxis dataKey="name" tick={{ fontSize: 11 }} tickMargin={8} stroke="#64748b" />
                     <YAxis
-                      tick={{ fontSize: 12 }}
+                      tick={{ fontSize: 11 }}
                       stroke="#64748b"
+                      width={42}
                       tickFormatter={(value) => `${Math.round(Number(value) / 10000)}만`}
                     />
                     <Tooltip formatter={(value) => formatKRW(Number(value))} />
@@ -2916,12 +3021,12 @@ export default function Home() {
                   <h2 className="text-lg font-bold text-slate-950">최근 거래내역</h2>
                   <p className="text-sm text-slate-500">선택 기간 최신 거래 8건</p>
                 </div>
-                <Button variant="ghost" onClick={() => setActiveTab("transactions")}>
+                <Button className="w-full sm:w-auto" variant="ghost" onClick={() => setActiveTab("transactions")}>
                   <Pencil className="h-4 w-4" />
                   메모 편집
                 </Button>
               </div>
-              <div className="overflow-x-auto">
+              <div className="hidden overflow-x-auto md:block">
                 <table className="w-full min-w-[880px] border-separate border-spacing-0 text-left text-sm">
                   <thead>
                     <tr className="text-slate-500">
@@ -2941,7 +3046,7 @@ export default function Home() {
                           colSpan={7}
                           className="border-b border-slate-100 py-8 text-center text-slate-500"
                         >
-                          선택 기간 거래가 없습니다.
+                          표시할 거래가 없습니다.
                         </td>
                       </tr>
                     )}
@@ -2978,7 +3083,7 @@ export default function Home() {
                         <td className="border-b border-slate-100 py-3 pl-4">
                           <div className="flex flex-wrap gap-2">
                             <Button
-                              className="min-h-8 px-3 py-1 text-xs"
+                              className="sm:min-h-8 px-3 py-1 text-sm sm:text-xs"
                               variant="secondary"
                               onClick={() => startEditTransaction(transaction)}
                             >
@@ -2986,7 +3091,7 @@ export default function Home() {
                               수정
                             </Button>
                             <Button
-                              className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                              className="sm:min-h-8 px-3 py-1 text-sm sm:text-xs text-red-600 hover:bg-red-50"
                               variant="ghost"
                               onClick={() => deleteTransaction(transaction)}
                             >
@@ -2999,6 +3104,17 @@ export default function Home() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+              <div className="grid gap-3 md:hidden">
+                {recentTransactions.length === 0 && <EmptyState message="표시할 거래가 없습니다." />}
+                {recentTransactions.map((transaction) => (
+                  <TransactionMobileCard
+                    key={transaction.id}
+                    transaction={transaction}
+                    onEdit={startEditTransaction}
+                    onDelete={deleteTransaction}
+                  />
+                ))}
               </div>
             </Card>
           </section>
@@ -3116,7 +3232,7 @@ export default function Home() {
                 </Field>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-500">{formNotice}</p>
-                  <Button type="submit">
+                  <Button className="w-full sm:w-auto" type="submit">
                     <Plus className="h-4 w-4" />
                     거래 추가
                   </Button>
@@ -3143,11 +3259,12 @@ export default function Home() {
                 />
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-500">{importNotice}</p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button variant="secondary" onClick={analyzeNotificationText}>
+                  <div className="grid gap-2 sm:flex sm:flex-wrap">
+                    <Button className="w-full sm:w-auto" variant="secondary" onClick={analyzeNotificationText}>
                       알림 내용 분석하기
                     </Button>
                     <Button
+                      className="w-full sm:w-auto"
                       disabled={addableNotificationRows.length === 0}
                       onClick={addParsedNotificationsToTransactions}
                     >
@@ -3156,7 +3273,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="overflow-x-auto rounded-md border border-slate-200">
+                <div className="hidden overflow-x-auto rounded-md border border-slate-200 md:block">
                   <table className="w-full min-w-[820px] border-separate border-spacing-0 text-left text-sm">
                     <thead>
                       <tr className="bg-slate-50 text-slate-500">
@@ -3174,7 +3291,7 @@ export default function Home() {
                       {parsedSuccessRows.length === 0 && (
                         <tr>
                           <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
-                            분석 결과가 없습니다.
+                            분석된 거래가 없습니다.
                           </td>
                         </tr>
                       )}
@@ -3203,6 +3320,34 @@ export default function Home() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+                <div className="grid gap-3 md:hidden">
+                  {parsedSuccessRows.length === 0 && <EmptyState message="분석된 거래가 없습니다." />}
+                  {parsedSuccessRows.map((row, index) => (
+                    <div
+                      key={`${row.line}-${row.date}-${row.amount}-mobile-${index}`}
+                      className="grid gap-3 rounded-md border border-slate-200 bg-white p-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <Badge tone={row.duplicate ? "orange" : "green"}>
+                          {row.duplicate ? "중복" : "추가 가능"}
+                        </Badge>
+                        <strong className="text-lg text-slate-950">{formatKRW(row.amount)}</strong>
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-950">{row.merchant}</p>
+                        <p className="text-sm text-slate-500">
+                          {row.date} {row.time}
+                        </p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 rounded-md bg-slate-50 p-3">
+                        <DetailLine label="카드" value={row.account} />
+                        <DetailLine label="소유" value={row.owner} />
+                        <DetailLine label="분류" value={row.category} />
+                        <DetailLine label="메모" value={row.memo} />
+                      </div>
+                    </div>
+                  ))}
                 </div>
 
                 {issueNotificationRows.length > 0 && (
@@ -3248,7 +3393,11 @@ export default function Home() {
                       <p className="text-xs font-semibold text-slate-400">{csvFileName}</p>
                     )}
                   </div>
-                  <Button disabled={addableCsvRows.length === 0} onClick={addParsedCsvRowsToTransactions}>
+                  <Button
+                    className="w-full sm:w-auto"
+                    disabled={addableCsvRows.length === 0}
+                    onClick={addParsedCsvRowsToTransactions}
+                  >
                     거래내역에 추가
                   </Button>
                 </div>
@@ -3258,7 +3407,7 @@ export default function Home() {
                     <p className="text-sm font-bold text-slate-700">CSV 분석 결과 미리보기</p>
                     <Badge tone="blue">{parsedCsvSuccessRows.length}건</Badge>
                   </div>
-                  <div className="overflow-x-auto rounded-md border border-slate-200">
+                  <div className="hidden overflow-x-auto rounded-md border border-slate-200 md:block">
                     <table className="w-full min-w-[820px] border-separate border-spacing-0 text-left text-sm">
                       <thead>
                         <tr className="bg-slate-50 text-slate-500">
@@ -3276,7 +3425,7 @@ export default function Home() {
                         {parsedCsvSuccessRows.length === 0 && (
                           <tr>
                             <td colSpan={8} className="px-3 py-8 text-center text-slate-500">
-                              CSV 분석 결과가 없습니다.
+                              분석된 거래가 없습니다.
                             </td>
                           </tr>
                         )}
@@ -3307,6 +3456,37 @@ export default function Home() {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                  <div className="grid gap-3 md:hidden">
+                    {parsedCsvSuccessRows.length === 0 && <EmptyState message="분석된 거래가 없습니다." />}
+                    {parsedCsvSuccessRows.map((row, index) => (
+                      <div
+                        key={`${row.rowNumber}-${row.date}-${row.account}-${row.merchant}-mobile-${index}`}
+                        className="grid gap-3 rounded-md border border-slate-200 bg-white p-4"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge tone={row.duplicate ? "orange" : "green"}>
+                              {row.duplicate ? "중복" : "추가 가능"}
+                            </Badge>
+                            <Badge tone="slate">{row.rowNumber}행</Badge>
+                          </div>
+                          <strong className="text-lg text-slate-950">
+                            {formatKRW(row.amount)}
+                          </strong>
+                        </div>
+                        <div>
+                          <p className="font-bold text-slate-950">{row.merchant}</p>
+                          <p className="text-sm text-slate-500">{row.date}</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 rounded-md bg-slate-50 p-3">
+                          <DetailLine label="카드" value={row.account} />
+                          <DetailLine label="소유" value={row.owner} />
+                          <DetailLine label="분류" value={row.category} />
+                          <DetailLine label="메모" value={row.memo} />
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -3342,9 +3522,7 @@ export default function Home() {
               </div>
 
               {!editingTransactionId && (
-                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                  최근 거래내역 또는 아래 거래 카드에서 수정 버튼을 눌러주세요.
-                </div>
+                <EmptyState message="최근 거래내역 또는 아래 거래 카드에서 수정 버튼을 눌러주세요." />
               )}
 
               {editingTransactionId && (
@@ -3438,53 +3616,16 @@ export default function Home() {
               </div>
               <div className="grid gap-3">
                 {sortedFilteredTransactions.length === 0 && (
-                  <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                    선택 기간 거래가 없습니다.
-                  </div>
+                  <EmptyState message="표시할 거래가 없습니다." />
                 )}
                 {sortedFilteredTransactions.map((transaction) => (
-                  <div
+                  <TransactionMobileCard
                     key={transaction.id}
-                    className="grid gap-3 rounded-md border border-slate-200 bg-white p-3"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-bold text-slate-950">
-                          {transaction.merchant} · {formatKRW(transaction.amount)}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          {shortDate(transaction.date)} · {transaction.owner} ·{" "}
-                          {transaction.category}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge tone="slate">{transaction.type}</Badge>
-                        <Button
-                          className="min-h-8 px-3 py-1 text-xs"
-                          variant="secondary"
-                          onClick={() => startEditTransaction(transaction)}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                          수정
-                        </Button>
-                        <Button
-                          className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
-                          variant="ghost"
-                          onClick={() => deleteTransaction(transaction)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          삭제
-                        </Button>
-                      </div>
-                    </div>
-                    <Textarea
-                      value={transaction.memo}
-                      onChange={(event) =>
-                        updateTransactionMemo(transaction.id, event.target.value)
-                      }
-                      className="min-h-20"
-                    />
-                  </div>
+                    transaction={transaction}
+                    onEdit={startEditTransaction}
+                    onDelete={deleteTransaction}
+                    onMemoChange={(value) => updateTransactionMemo(transaction.id, value)}
+                  />
                 ))}
               </div>
             </Card>
@@ -3505,7 +3646,7 @@ export default function Home() {
                   </div>
                   <Landmark className="h-5 w-5 text-blue-600" />
                 </div>
-                <p className="mb-3 text-2xl font-bold text-slate-950">
+                <p className="mb-3 break-words text-2xl font-bold leading-tight text-slate-950">
                   {formatKRW(account.balance)}
                 </p>
                 <div className="grid gap-3">
@@ -3517,9 +3658,9 @@ export default function Home() {
                       <span className="text-xs font-semibold text-slate-400">{account.memo}</span>
                     )}
                   </div>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                     <Button
-                      className="min-h-8 px-3 py-1 text-xs"
+                      className="sm:min-h-8 px-3 py-1 text-sm sm:text-xs"
                       variant="secondary"
                       onClick={() => startEditAccount(account)}
                     >
@@ -3527,7 +3668,7 @@ export default function Home() {
                       수정
                     </Button>
                     <Button
-                      className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
+                      className="sm:min-h-8 px-3 py-1 text-sm sm:text-xs text-red-600 hover:bg-red-50"
                       variant="ghost"
                       onClick={() => deleteAccount(account)}
                     >
@@ -3551,16 +3692,14 @@ export default function Home() {
                   </p>
                 </div>
               </div>
-              <Button onClick={startAddAccount}>
+              <Button className="w-full sm:w-auto" onClick={startAddAccount}>
                 <Plus className="h-4 w-4" />
                 계좌 추가
               </Button>
             </div>
 
             {accountFormMode === "idle" && (
-              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                계좌 카드의 수정 버튼을 누르거나 새 계좌를 추가해주세요.
-              </div>
+              <EmptyState message="계좌 카드의 수정 버튼을 누르거나 새 계좌를 추가해주세요." />
             )}
 
             {accountFormMode !== "idle" && (
@@ -3614,7 +3753,7 @@ export default function Home() {
                 </div>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-500">{accountNotice}</p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                     <Button variant="secondary" onClick={cancelAccountForm}>
                       <X className="h-4 w-4" />
                       취소
@@ -3640,51 +3779,82 @@ export default function Home() {
                   </p>
                 </div>
               </div>
-              <Button onClick={startAddBudget}>
+              <Button className="w-full sm:w-auto" onClick={startAddBudget}>
                 <Plus className="h-4 w-4" />
                 예산 추가
               </Button>
             </div>
 
             <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {budgets.map((budget) => (
-                <div key={budget.id} className="grid gap-3 rounded-md border border-slate-200 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-bold text-slate-950">{budget.category}</p>
-                      <p className="text-sm text-slate-500">{formatKRW(budget.monthlyLimit)}</p>
-                      {budget.memo && (
-                        <p className="mt-1 text-xs font-semibold text-slate-400">{budget.memo}</p>
-                      )}
+              {budgets.map((budget) => {
+                const usage = budgetUsageRows.find((row) => row.category === budget.category);
+                const progress = Math.min(usage?.usageRate ?? 0, 100);
+
+                return (
+                  <div
+                    key={budget.id}
+                    className="grid gap-3 rounded-md border border-slate-200 p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-950">{budget.category}</p>
+                        <p className="text-sm text-slate-500">{formatKRW(budget.monthlyLimit)}</p>
+                        {budget.memo && (
+                          <p className="mt-1 text-xs font-semibold text-slate-400">
+                            {budget.memo}
+                          </p>
+                        )}
+                      </div>
+                      <Badge tone={usage ? getBudgetStatusTone(usage.status) : "blue"}>
+                        {usage ? getBudgetStatusLabel(usage.status) : "월 예산"}
+                      </Badge>
                     </div>
-                    <Badge tone="blue">월 예산</Badge>
+                    <div className="grid gap-2">
+                      <div className="flex items-center justify-between gap-2 text-sm">
+                        <span className="text-slate-500">
+                          사용 {formatKRW(usage?.spent ?? 0)}
+                        </span>
+                        <span className="font-bold text-slate-700">
+                          {usage?.usageRate === null || usage?.usageRate === undefined
+                            ? "-"
+                            : `${usage.usageRate}%`}
+                        </span>
+                      </div>
+                      <div className="h-3 overflow-hidden rounded-full bg-slate-100">
+                        <div
+                          className={cn(
+                            "h-full rounded-full",
+                            getBudgetBarColor(usage?.status ?? "safe")
+                          )}
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+                      <Button
+                        className="sm:min-h-8 px-3 py-1 text-sm sm:text-xs"
+                        variant="secondary"
+                        onClick={() => startEditBudget(budget)}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        수정
+                      </Button>
+                      <Button
+                        className="sm:min-h-8 px-3 py-1 text-sm sm:text-xs text-red-600 hover:bg-red-50"
+                        variant="ghost"
+                        onClick={() => deleteBudget(budget)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        삭제
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      className="min-h-8 px-3 py-1 text-xs"
-                      variant="secondary"
-                      onClick={() => startEditBudget(budget)}
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      수정
-                    </Button>
-                    <Button
-                      className="min-h-8 px-3 py-1 text-xs text-red-600 hover:bg-red-50"
-                      variant="ghost"
-                      onClick={() => deleteBudget(budget)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      삭제
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {budgetFormMode === "idle" && (
-              <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                예산 카드의 수정 버튼을 누르거나 새 예산을 추가해주세요.
-              </div>
+              <EmptyState message="예산 카드의 수정 버튼을 누르거나 새 예산을 추가해주세요." />
             )}
 
             {budgetFormMode !== "idle" && (
@@ -3717,7 +3887,7 @@ export default function Home() {
                 </div>
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-slate-500">{budgetNotice}</p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
                     <Button variant="secondary" onClick={cancelBudgetForm}>
                       <X className="h-4 w-4" />
                       취소
@@ -3733,9 +3903,11 @@ export default function Home() {
           </Card>
 
           <Card>
-            <div className="mb-5 flex items-center gap-3">
-              <Cloud className="h-5 w-5 text-blue-600" />
-              <div>
+            <div className="mb-5 flex items-start gap-3">
+              <div className="rounded-lg bg-blue-50 p-2 text-blue-700">
+                <Cloud className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
                 <h2 className="text-lg font-bold text-slate-950">클라우드 공동 저장</h2>
                 <p className="text-sm text-slate-500">
                   이 기능은 부부가 여러 기기에서 같은 데이터를 보기 위한 공동 저장 기능입니다.
@@ -3751,13 +3923,15 @@ export default function Home() {
 
             <div className="mb-4 grid gap-3 md:grid-cols-2">
               <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-bold text-slate-800">
-                  마지막 클라우드 저장: {formatDateTime(cloudLastSaveAt)}
+                <p className="text-xs font-semibold text-slate-400">마지막 클라우드 저장</p>
+                <p className="mt-1 break-words text-sm font-bold text-slate-800">
+                  {formatDateTime(cloudLastSaveAt)}
                 </p>
               </div>
               <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
-                <p className="text-sm font-bold text-slate-800">
-                  마지막 클라우드 불러오기: {formatDateTime(cloudLastLoadAt)}
+                <p className="text-xs font-semibold text-slate-400">마지막 클라우드 불러오기</p>
+                <p className="mt-1 break-words text-sm font-bold text-slate-800">
+                  {formatDateTime(cloudLastLoadAt)}
                 </p>
               </div>
             </div>
@@ -3771,20 +3945,25 @@ export default function Home() {
                   placeholder="APP_SYNC_PIN"
                 />
               </Field>
-              <div className="flex flex-wrap gap-2">
-                <Button disabled={cloudSyncing} onClick={saveCloudSnapshot}>
+              <div className="grid gap-2 sm:grid-cols-2 lg:flex lg:flex-wrap">
+                <Button className="w-full lg:w-auto" disabled={cloudSyncing} onClick={saveCloudSnapshot}>
                   <CloudUpload className="h-4 w-4" />
                   {cloudSyncing ? "처리 중" : "클라우드에 저장"}
                 </Button>
-                <Button disabled={cloudSyncing} variant="secondary" onClick={loadCloudSnapshot}>
+                <Button
+                  className="w-full lg:w-auto"
+                  disabled={cloudSyncing}
+                  variant="secondary"
+                  onClick={loadCloudSnapshot}
+                >
                   <CloudDownload className="h-4 w-4" />
                   클라우드에서 불러오기
                 </Button>
               </div>
             </div>
 
-            <div className="mt-4 grid gap-3 rounded-md bg-slate-50 p-4 text-sm text-slate-600">
-              <p>{cloudNotice}</p>
+            <div className="mt-4 grid gap-3 rounded-md border border-blue-100 bg-blue-50/60 p-4 text-sm text-slate-700">
+              <p className="font-semibold">{cloudNotice}</p>
               <p>
                 저장 범위: 거래 {transactions.length}건, 계좌 {accounts.length}개, 예산{" "}
                 {budgets.length}개, 기간 메모
@@ -3940,7 +4119,7 @@ export default function Home() {
                   <p className="text-sm font-bold text-slate-700">백업 CSV 미리보기</p>
                   <Badge tone="blue">{parsedBackupCsvSuccessRows.length}건</Badge>
                 </div>
-                <div className="overflow-x-auto rounded-md border border-slate-200">
+                <div className="hidden overflow-x-auto rounded-md border border-slate-200 md:block">
                   <table className="w-full min-w-[980px] border-separate border-spacing-0 text-left text-sm">
                     <thead>
                       <tr className="bg-slate-50 text-slate-500">
@@ -3960,7 +4139,7 @@ export default function Home() {
                       {parsedBackupCsvSuccessRows.length === 0 && (
                         <tr>
                           <td colSpan={10} className="px-3 py-8 text-center text-slate-500">
-                            백업 CSV 분석 결과가 없습니다.
+                            분석된 거래가 없습니다.
                           </td>
                         </tr>
                       )}
@@ -4000,6 +4179,41 @@ export default function Home() {
                       ))}
                     </tbody>
                   </table>
+                </div>
+                <div className="grid gap-3 md:hidden">
+                  {parsedBackupCsvSuccessRows.length === 0 && (
+                    <EmptyState message="분석된 거래가 없습니다." />
+                  )}
+                  {parsedBackupCsvSuccessRows.map((row) => (
+                    <div
+                      key={`${row.rowNumber}-${row.transaction.id}-mobile`}
+                      className="grid gap-3 rounded-md border border-slate-200 bg-white p-4"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge tone={getBackupCsvActionTone(row.action)}>
+                            {getBackupCsvActionLabel(row.action)}
+                          </Badge>
+                          <Badge tone="slate">{row.rowNumber}행</Badge>
+                        </div>
+                        <strong className="text-lg text-slate-950">
+                          {formatKRW(row.transaction.amount)}
+                        </strong>
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-950">{row.transaction.merchant}</p>
+                        <p className="text-sm text-slate-500">{row.transaction.date}</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 rounded-md bg-slate-50 p-3">
+                        <DetailLine label="소유" value={row.transaction.owner} />
+                        <DetailLine label="유형" value={row.transaction.type} />
+                        <DetailLine label="계좌" value={row.transaction.account} />
+                        <DetailLine label="분류" value={row.transaction.category} />
+                        <DetailLine label="id" value={row.transaction.id} />
+                        <DetailLine label="메모" value={row.transaction.memo || "메모 없음"} />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
 
