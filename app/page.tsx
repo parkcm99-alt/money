@@ -1321,7 +1321,7 @@ function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
     <input
       {...props}
       className={cn(
-        "min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:min-h-10",
+        "min-h-11 w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition file:mr-3 file:min-h-9 file:rounded-md file:border-0 file:bg-slate-100 file:px-3 file:text-sm file:font-semibold file:text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 sm:min-h-10",
         props.className
       )}
     />
@@ -1439,7 +1439,7 @@ function MetricCard({
 
 function ChartFallback({ message = "차트 준비 중" }: { message?: string }) {
   return (
-    <div className="flex h-full min-h-72 items-center justify-center rounded-md bg-slate-50 text-sm font-semibold text-slate-400">
+    <div className="flex h-full min-h-60 items-center justify-center rounded-md bg-slate-50 text-sm font-semibold text-slate-400 sm:min-h-72">
       {message}
     </div>
   );
