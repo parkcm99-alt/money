@@ -225,8 +225,8 @@ const STORAGE_KEYS = {
   accounts: "couple-finance-dashboard.accounts.v1",
   budgets: "couple-finance-dashboard.budgets.v1",
   syncPin: "couple-finance-dashboard.syncPin.v1",
-  localLastSyncAt: "couple-finance-dashboard.localLastSyncAt.v1",
-  cloudLastSyncAt: "couple-finance-dashboard.cloudLastSyncAt.v1"
+  cloudLastSaveAt: "couple-finance-dashboard.cloudLastSaveAt.v1",
+  cloudLastLoadAt: "couple-finance-dashboard.cloudLastLoadAt.v1"
 } as const;
 const DEFAULT_PERIOD_MEMO =
   "이번 기간은 주거비와 생활/마트 지출이 컸다. 다음 기간은 식비 예산을 먼저 확인하고 장보기 횟수를 줄여보기.";
@@ -1525,8 +1525,8 @@ export default function Home() {
     "Supabase Free 공동 저장은 환경변수 설정 후 사용할 수 있습니다."
   );
   const [cloudSyncing, setCloudSyncing] = useState(false);
-  const [localLastSyncAt, setLocalLastSyncAt] = useState<string | null>(null);
-  const [cloudLastSyncAt, setCloudLastSyncAt] = useState<string | null>(null);
+  const [cloudLastSaveAt, setCloudLastSaveAt] = useState<string | null>(null);
+  const [cloudLastLoadAt, setCloudLastLoadAt] = useState<string | null>(null);
   const [formNotice, setFormNotice] = useState("샘플 데이터로 시작했습니다.");
   const [connectorNotice, setConnectorNotice] = useState("아직 외부 API는 연결하지 않았습니다.");
   const [storageNotice, setStorageNotice] = useState("브라우저 저장소와 동기화 준비 중입니다.");
@@ -1696,8 +1696,8 @@ export default function Home() {
     const storedAccounts = parseStoredAccounts(window.localStorage.getItem(STORAGE_KEYS.accounts));
     const storedBudgets = parseStoredBudgets(window.localStorage.getItem(STORAGE_KEYS.budgets));
     const storedSyncPin = window.localStorage.getItem(STORAGE_KEYS.syncPin);
-    const storedLocalLastSyncAt = window.localStorage.getItem(STORAGE_KEYS.localLastSyncAt);
-    const storedCloudLastSyncAt = window.localStorage.getItem(STORAGE_KEYS.cloudLastSyncAt);
+    const storedCloudLastSaveAt = window.localStorage.getItem(STORAGE_KEYS.cloudLastSaveAt);
+    const storedCloudLastLoadAt = window.localStorage.getItem(STORAGE_KEYS.cloudLastLoadAt);
 
     if (storedTransactions) {
       setTransactions(storedTransactions);
@@ -1719,12 +1719,12 @@ export default function Home() {
       setSyncPin(storedSyncPin);
     }
 
-    if (storedLocalLastSyncAt) {
-      setLocalLastSyncAt(storedLocalLastSyncAt);
+    if (storedCloudLastSaveAt) {
+      setCloudLastSaveAt(storedCloudLastSaveAt);
     }
 
-    if (storedCloudLastSyncAt) {
-      setCloudLastSyncAt(storedCloudLastSyncAt);
+    if (storedCloudLastLoadAt) {
+      setCloudLastLoadAt(storedCloudLastLoadAt);
     }
 
     setStorageNotice(
@@ -1742,7 +1742,6 @@ export default function Home() {
 
     try {
       window.localStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(transactions));
-      setLocalLastSyncAt(new Date().toISOString());
     } catch {
       setStorageNotice("거래내역을 브라우저 저장소에 저장하지 못했습니다.");
     }
@@ -1755,7 +1754,6 @@ export default function Home() {
 
     try {
       window.localStorage.setItem(STORAGE_KEYS.periodMemo, JSON.stringify(periodMemo));
-      setLocalLastSyncAt(new Date().toISOString());
     } catch {
       setStorageNotice("기간 메모를 브라우저 저장소에 저장하지 못했습니다.");
     }
@@ -1768,7 +1766,6 @@ export default function Home() {
 
     try {
       window.localStorage.setItem(STORAGE_KEYS.accounts, JSON.stringify(accounts));
-      setLocalLastSyncAt(new Date().toISOString());
     } catch {
       setStorageNotice("계좌 정보를 브라우저 저장소에 저장하지 못했습니다.");
     }
@@ -1781,7 +1778,6 @@ export default function Home() {
 
     try {
       window.localStorage.setItem(STORAGE_KEYS.budgets, JSON.stringify(budgets));
-      setLocalLastSyncAt(new Date().toISOString());
     } catch {
       setStorageNotice("예산 정보를 브라우저 저장소에 저장하지 못했습니다.");
     }
@@ -1809,13 +1805,13 @@ export default function Home() {
     }
 
     try {
-      if (localLastSyncAt) {
-        window.localStorage.setItem(STORAGE_KEYS.localLastSyncAt, localLastSyncAt);
+      if (cloudLastSaveAt) {
+        window.localStorage.setItem(STORAGE_KEYS.cloudLastSaveAt, cloudLastSaveAt);
       }
     } catch {
-      setStorageNotice("로컬 마지막 저장 시간을 브라우저 저장소에 저장하지 못했습니다.");
+      setStorageNotice("마지막 클라우드 저장 시간을 브라우저 저장소에 저장하지 못했습니다.");
     }
-  }, [localLastSyncAt, storageReady]);
+  }, [cloudLastSaveAt, storageReady]);
 
   useEffect(() => {
     if (!storageReady || typeof window === "undefined") {
@@ -1823,13 +1819,13 @@ export default function Home() {
     }
 
     try {
-      if (cloudLastSyncAt) {
-        window.localStorage.setItem(STORAGE_KEYS.cloudLastSyncAt, cloudLastSyncAt);
+      if (cloudLastLoadAt) {
+        window.localStorage.setItem(STORAGE_KEYS.cloudLastLoadAt, cloudLastLoadAt);
       }
     } catch {
-      setStorageNotice("클라우드 마지막 저장 시간을 브라우저 저장소에 저장하지 못했습니다.");
+      setStorageNotice("마지막 클라우드 불러오기 시간을 브라우저 저장소에 저장하지 못했습니다.");
     }
-  }, [cloudLastSyncAt, storageReady]);
+  }, [cloudLastLoadAt, storageReady]);
 
   useEffect(() => {
     if (!resetStorageToken || typeof window === "undefined") {
@@ -1842,8 +1838,8 @@ export default function Home() {
       window.localStorage.removeItem(STORAGE_KEYS.accounts);
       window.localStorage.removeItem(STORAGE_KEYS.budgets);
       window.localStorage.removeItem(STORAGE_KEYS.syncPin);
-      window.localStorage.removeItem(STORAGE_KEYS.localLastSyncAt);
-      window.localStorage.removeItem(STORAGE_KEYS.cloudLastSyncAt);
+      window.localStorage.removeItem(STORAGE_KEYS.cloudLastSaveAt);
+      window.localStorage.removeItem(STORAGE_KEYS.cloudLastLoadAt);
     } catch {
       setStorageNotice("브라우저 저장소 초기화 중 오류가 있었지만 화면 데이터는 복구했습니다.");
     }
@@ -2424,7 +2420,7 @@ export default function Home() {
     const confirmed =
       typeof window === "undefined" ||
       window.confirm(
-        "현재 로컬 데이터를 클라우드 데이터로 저장합니다.\n기존 클라우드 데이터가 덮어써질 수 있습니다.\n계속하시겠습니까?"
+        "현재 브라우저의 데이터를 클라우드에 저장합니다.\n기존 클라우드 데이터가 덮어써질 수 있습니다.\n계속하시겠습니까?"
       );
 
     if (!confirmed) {
@@ -2460,7 +2456,7 @@ export default function Home() {
       }
 
       if (result.updatedAt) {
-        setCloudLastSyncAt(result.updatedAt);
+        setCloudLastSaveAt(result.updatedAt);
       }
 
       setCloudNotice(
@@ -2536,7 +2532,7 @@ export default function Home() {
       setBudgetDraft(emptyBudgetDraft);
 
       if (result.updatedAt) {
-        setCloudLastSyncAt(result.updatedAt);
+        setCloudLastLoadAt(result.updatedAt);
       }
 
       setCloudNotice(
@@ -2581,8 +2577,8 @@ export default function Home() {
     setBudgetDraft(emptyBudgetDraft);
     setBudgetNotice("샘플 예산 정보로 초기화했습니다.");
     setSyncPin("");
-    setLocalLastSyncAt(null);
-    setCloudLastSyncAt(null);
+    setCloudLastSaveAt(null);
+    setCloudLastLoadAt(null);
     setCloudNotice("Supabase Free 공동 저장은 환경변수 설정 후 사용할 수 있습니다.");
     setFormNotice("샘플 데이터로 초기화했습니다.");
     setStorageNotice("데이터를 초기화하고 샘플 데이터로 복구했습니다.");
@@ -3756,12 +3752,12 @@ export default function Home() {
             <div className="mb-4 grid gap-3 md:grid-cols-2">
               <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-bold text-slate-800">
-                  로컬 마지막 저장: {formatDateTime(localLastSyncAt)}
+                  마지막 클라우드 저장: {formatDateTime(cloudLastSaveAt)}
                 </p>
               </div>
               <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-bold text-slate-800">
-                  마지막 클라우드 저장: {formatDateTime(cloudLastSyncAt)}
+                  마지막 클라우드 불러오기: {formatDateTime(cloudLastLoadAt)}
                 </p>
               </div>
             </div>
