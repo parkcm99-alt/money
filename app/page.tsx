@@ -2055,8 +2055,14 @@ export default function Home() {
     event.preventDefault();
     const amount = Number(draft.amount);
 
-    if (!draft.merchant.trim() || !draft.account.trim() || !Number.isFinite(amount) || amount <= 0) {
-      setFormNotice("거래처, 계좌, 금액을 확인해주세요.");
+    if (
+      !draft.date ||
+      !draft.merchant.trim() ||
+      !draft.account.trim() ||
+      !Number.isFinite(amount) ||
+      amount <= 0
+    ) {
+      setFormNotice("날짜, 거래처, 계좌, 금액을 확인해주세요. 금액은 0보다 커야 합니다.");
       return;
     }
 
@@ -2067,7 +2073,7 @@ export default function Home() {
       type: draft.type,
       account: draft.account.trim(),
       merchant: draft.merchant.trim(),
-      category: draft.category.trim() || "미분류",
+      category: draft.category.trim() || "기타",
       amount,
       memo: draft.memo.trim()
     };
@@ -2099,6 +2105,14 @@ export default function Home() {
     });
     setEditNotice(`${transaction.merchant} 거래를 수정 중입니다.`);
     setActiveTab("transactions");
+
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(() => {
+        document
+          .getElementById("transaction-edit-section")
+          ?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
   }
 
   function cancelEditTransaction() {
@@ -2119,20 +2133,18 @@ export default function Home() {
 
     if (
       !editDraft.date ||
-      !editDraft.account.trim() ||
       !editDraft.merchant.trim() ||
-      !editDraft.category.trim() ||
       !Number.isFinite(amount) ||
       amount <= 0
     ) {
-      setEditNotice("날짜, 계좌, 사용처, 카테고리, 금액을 확인해주세요.");
+      setEditNotice("날짜, 사용처, 금액을 확인해주세요. 금액은 0보다 커야 합니다.");
       return;
     }
 
     const nextTransaction: Transaction = {
-      account: editDraft.account.trim(),
+      account: editDraft.account.trim() || "미지정",
       amount,
-      category: editDraft.category.trim(),
+      category: editDraft.category.trim() || "기타",
       date: editDraft.date,
       id: editingTransactionId,
       memo: editDraft.memo.trim(),
@@ -2154,7 +2166,9 @@ export default function Home() {
   function deleteTransaction(transaction: Transaction) {
     const confirmed =
       typeof window === "undefined" ||
-      window.confirm(`${transaction.merchant} ${formatKRW(transaction.amount)} 거래를 삭제할까요?`);
+      window.confirm(
+        "이 거래를 삭제하시겠습니까?\n삭제 후에는 복구하기 어렵습니다."
+      );
 
     if (!confirmed) {
       return;
@@ -3215,7 +3229,7 @@ export default function Home() {
                   <Field label="금액">
                     <Input
                       type="number"
-                      min="0"
+                      min="1"
                       inputMode="numeric"
                       value={draft.amount}
                       onChange={(event) => updateDraft("amount", event.target.value)}
@@ -3512,7 +3526,7 @@ export default function Home() {
           </div>
 
           <div className="grid gap-6">
-            <Card>
+            <Card id="transaction-edit-section">
               <div className="mb-5 flex items-center gap-3">
                 <Pencil className="h-5 w-5 text-blue-600" />
                 <div>
@@ -3573,7 +3587,7 @@ export default function Home() {
                     <Field label="금액">
                       <Input
                         type="number"
-                        min="0"
+                        min="1"
                         inputMode="numeric"
                         value={editDraft.amount}
                         onChange={(event) => updateEditDraft("amount", event.target.value)}
